@@ -6,11 +6,14 @@ participant's desktop as a **real, native, movable window filled with a live vid
 per-participant cursors and the ability to click/type/draw into any shared window at once, routed
 back to the owning Mac without stealing its focus.
 
-> **Status: foundation / Phase 0.** APIs verified against live Apple docs + the local SDK
-> `.swiftinterface` headers; the shared logic package builds and passes 84 unit tests; the networked
-> and platform-framework pieces are scaffolded behind seams. Nothing has been run on paired hardware
-> — see `TESTING.md` for the two-tier gate status and the PENDING human run-book. This is **not** a
-> shippable app yet.
+> **Status: Phase 1 — working calls.** The macOS app runs a real call: join by link/launch-arg →
+> connect to a self-hosted LiveKit SFU → share a window (ScreenCaptureKit → VP9) → every peer renders
+> it as a live, movable native `NSWindow`, with voice, coalesced cursors, and mirrored session state.
+> The end-to-end media pipeline (capture → VP9 encode → SFU → decode → render) is verified against a
+> live `livekit-server --dev`; an iOS viewer app builds + runs. The remaining live gates — the
+> two-instance screenshot and iOS render — need one-time **human steps** (Screen Recording / mic TCC,
+> an iOS URL-scheme tap); SharePlay's runtime needs 2 devices on different iCloud accounts. See
+> `TESTING.md` for the two-tier gate status and the PENDING human run-book.
 
 ## Architecture in one paragraph
 
@@ -29,40 +32,73 @@ unverified.
 - For the media plane: a reachable **LiveKit server** (or `livekit-server --dev` on the LAN for local
   testing). See `infra/`.
 
+## Quickstart — a real call between two instances on one Mac
+
+```bash
+# 1. Media plane (self-hosted SFU). livekit-server is NOT preinstalled:
+brew install livekit && livekit-server --dev &
+
+# 2. Generate the Xcode project (the .xcodeproj is gitignored; project.yml is the source of truth)
+#    and build the macOS app. XcodeGen 2.42.0 + Xcode 26.1.
+xcodegen generate --spec Apps/project.yml
+xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-macOS -derivedDataPath build build
+
+# 3. Launch TWO instances (open -n is REQUIRED to spawn a second, not focus the first).
+#    Each gets a fresh identity — LiveKit evicts duplicate-identity holders.
+APP=build/Build/Products/Debug/JoeScreen.app
+open -n "$APP" --args --join-url ws://localhost:7880 --room demo --identity "$(uuidgen)"
+open -n "$APP" --args --join-url ws://localhost:7880 --room demo --identity "$(uuidgen)"
+
+# 4. Instance A: Share → pick a window (grant Screen Recording once).  B: watch it live in a native
+#    window. (Or bypass the picker: add `--share-window-id <CGWindowID>` to A's launch args.)
+```
+
+The iOS viewer app (viewer + voice only — iOS can't be remote-controlled):
+
+```bash
+xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-iOS \
+  -destination 'generic/platform=iOS Simulator' build
+```
+
 ## Build & test (the primary machine gate)
 
 The shared logic lives in a Swift package so `swift build`/`swift test` is the fast, offline,
 hardware-free green gate:
 
 ```bash
-swift build          # 5 library targets, Swift 6 + strict concurrency
-swift test           # 84 tests, 0 failures — wire protocol, auth, mapping, admission, codec, …
+swift build          # 6 library targets; JoeScreenKit at Swift 6 + strict concurrency
+swift test           # 117 tests, 5 skipped (integration/capture need a server/TCC), 0 failures
 ```
 
-The app + broadcast-extension **product** targets live in an Xcode project layer
-(`Apps/JoeScreen.xcodeproj`, added in a later phase) that consumes this package. Scheme names:
-`JoeScreen-macOS`, `JoeScreen-iOS`, `JoeScreenKit-Package`. Expected `xcodebuild` invocations once the
-project layer exists:
+The LiveKit integration + voice tests run against a dev server (skip, never fail, when it's absent):
 
 ```bash
-xcodebuild -scheme JoeScreen-macOS -destination 'platform=macOS' build
-xcodebuild -scheme JoeScreen-iOS   -destination 'generic/platform=iOS' build
+livekit-server --dev &
+LIVEKIT_URL=ws://localhost:7880 swift test --filter JoeScreenLiveKitTests   # 5 tests, 0 failures
 ```
 
 ## Dependencies (pinned — `DECISIONS.md` D7)
 
-Real, resolved tags (verified 2026-07-07). The default `swift build`/`swift test` gate targets are
-**dependency-free** (pure logic); the `.package(...)` lines in `Package.swift` are present but
-commented, to be enabled for the Xcode app layer.
+Real, resolved tags (`Package.resolved` committed). Only `JoeScreenLiveKit` (the sole
+libwebrtc-linking target) and the app layer link LiveKit; `JoeScreenKit` + its tests stay
+dependency-free so the machine gate is fast and offline. SwiftTerm / swift-certificates stay
+commented (dark) until their milestones (F12 terminal / LAN QUIC).
 
-| Dependency | Pin |
-|---|---|
-| `livekit/client-sdk-swift` | `2.15.1` |
-| `migueldeicaza/SwiftTerm`  | `1.13.0` |
-| `apple/swift-certificates` | `1.19.3` |
-| `livekit/livekit-server` (Docker) | `v1.13.3` |
+| Dependency | Pin | Status |
+|---|---|---|
+| `livekit/client-sdk-swift` | `2.15.1` | active (media plane) |
+| `migueldeicaza/SwiftTerm`  | `1.13.0` | dark (F12) |
+| `apple/swift-certificates` | `1.19.3` | dark (LAN QUIC) |
+| `livekit/livekit-server` (`brew`/Docker) | `v1.13.3` | infra |
 
 Graph rule: **no dependency that links a second libwebrtc may enter the graph.**
+
+## Tooling
+
+- **XcodeGen 2.42.0** generates `Apps/JoeScreen.xcodeproj` from `Apps/project.yml` (the committed
+  source of truth; the `.xcodeproj` is gitignored). Regenerate: `xcodegen generate --spec
+  Apps/project.yml`.
+- **`livekit-server` 1.13.3** + **`lk` CLI 2.16.7** via `brew install livekit livekit-cli`.
 
 ## Signing (`TEAM_ID` placeholder strategy — `DECISIONS.md` D6, `RISKS.md` R2)
 
@@ -106,7 +142,18 @@ DECISIONS.md RISKS.md TESTING.md
 ```
 
 ## What works today vs. what's PENDING
-- ✅ Verified API surface, green package build + 84 tests, complete architecture + decision/risk docs,
-  pinned deps, server infra ready to deploy.
-- ⏳ All networked behavior, capture/encode/decode/render on-device, input injection, the iOS
-  broadcast extension, and every F1–F14 acceptance criterion — **PENDING hardware** (`TESTING.md`).
+- ✅ **Working macOS call app:** Direct Session Mode join (link / launch-arg / URL scheme), connect to
+  a self-hosted LiveKit SFU, share a window (SCK → VP9), render every peer's window as a live movable
+  `NSWindow`, voice on join, coalesced cursors, mirrored `RoomModel` over a reliable `state` channel.
+- ✅ **Verified end-to-end** against `livekit-server --dev`: video A→B renders (real
+  capture→VP9→SFU→decode→render), all six data channels round-trip, identity binding, audio
+  publish/subscribe metadata. 117-test offline gate green; iOS viewer app builds + runs.
+- ✅ SharePlay coordination layer (`GroupSessionCoordinator: SessionProviding`) compiles against the
+  real GroupActivities framework + unit-tested against a `FakeSessionProvider`.
+- ⏳ **PENDING human steps** (one dev Mac): the live two-instance screenshot (Screen Recording TCC),
+  the audible-voice check (mic TCC), and the iOS live render (URL-scheme tap). **PENDING hardware** (2
+  devices / different iCloud accounts): SharePlay runtime, F7-at-the-bound, glass-to-glass latency —
+  see the `TESTING.md` run-book.
+- 🔜 **Not yet built** (post-M4 phases per `BUILD_PROMPT.md` §7): input injection (F4/F5), clipboard
+  (F6), draw (F9), terminal (F12), iOS broadcast extension — the tested `InputAuthorizer` /
+  `CoordinateMapper` / `ClipboardSyncEngine` / `DrawModel` / `SecretRedactor` seams await their pumps.

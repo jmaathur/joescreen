@@ -277,17 +277,17 @@
 
 <header>
   <div class="wrap">
-    <p class="eyebrow">joescreen · phase-0 foundation</p>
+    <p class="eyebrow">joescreen · phase-1 · working calls</p>
     <h1>Installing &amp; running JoeScreen</h1>
     <p class="lede">A native macOS + iOS shared-desktop app in the spirit of CoScreen — multiple people share individual app windows, each landing on every peer's desktop as a real, movable, live-video window.</p>
 
     <div class="banner">
-      <strong>Read this first.</strong> JoeScreen is at its <strong>foundation stage</strong>. What runs today is the <strong>test suite</strong> and the <strong>media server</strong> — not the apps. There is no clickable JoeScreen app yet: on-device capture, input injection, and the iOS extension are scaffolded behind seams and are <strong>pending hardware</strong>. This page tells you exactly what you can run now and what's still ahead.
+      <strong>Read this first.</strong> There is now a <strong>working macOS call app</strong>. Run <code>livekit-server --dev</code>, build the app with XcodeGen&nbsp;+&nbsp;Xcode, launch two instances, and one shares a window that the other renders live in a native window — with voice and cursors. The full media pipeline (capture&nbsp;→&nbsp;VP9&nbsp;→&nbsp;SFU&nbsp;→&nbsp;decode&nbsp;→&nbsp;render) is <strong>verified against a live dev server</strong>; an iOS viewer app builds&nbsp;+&nbsp;runs. The remaining live gates need one-time <strong>human steps</strong> (Screen&nbsp;Recording&nbsp;/&nbsp;mic TCC grants, an iOS tap); SharePlay's runtime needs two devices on different iCloud accounts. Input injection, clipboard, draw, and terminal are the next phases.
     </div>
 
     <div class="legend" aria-label="status legend">
       <span class="tag ok"><span class="dot"></span>Runs today</span>
-      <span class="tag pending"><span class="dot"></span>Pending hardware</span>
+      <span class="tag pending"><span class="dot"></span>Pending human / hardware</span>
     </div>
   </div>
 </header>
@@ -333,17 +333,17 @@ cd joescreen">Copy</button></div>
     <div class="cmd">
       <div class="cmd-head"><span class="label">the machine gate</span><button class="copy" data-copy="swift build
 swift test">Copy</button></div>
-      <pre><span class="p">$</span> swift build     <span class="c"># 5 library targets, Swift 6 + strict concurrency</span>
-<span class="p">$</span> swift test      <span class="c"># 84 tests across the non-networked seams</span></pre>
+      <pre><span class="p">$</span> swift build     <span class="c"># 6 library targets; JoeScreenKit at Swift 6 + strict concurrency</span>
+<span class="p">$</span> swift test      <span class="c"># 117 tests, 5 skipped (need a server/TCC), 0 failures</span></pre>
     </div>
     <p>Expected result:</p>
     <div class="cmd">
       <div class="cmd-head"><span class="label">expected output</span></div>
       <pre>Build complete!
 Test Suite 'All tests' passed
-     Executed 84 tests, with 0 failures</pre>
+     Executed 117 tests, with 5 tests skipped and 0 failures</pre>
     </div>
-    <p>Those 84 tests cover the load-bearing logic that has to be correct before any UI exists: the wire protocol and its channel matrix, per-sender input ordering &amp; loss detection, coordinate mapping with the security clamp, owner-side input authorization (every deny path), bandwidth admission math, the codec-fallback state machine, clipboard diffing, terminal secret redaction, ICE batching, and signaling back-pressure. See <code>TESTING.md</code> for the full map.</p>
+    <p>These tests cover the load-bearing logic: the wire protocol and its six-channel matrix, per-sender input ordering &amp; loss detection, the chunker for &gt;15&nbsp;KB payloads, cursor coalescing, session-coordination + bootstrap round-trips, coordinate mapping with the security clamp, owner-side input authorization (every deny path), bandwidth admission math, the codec-fallback state machine, clipboard diffing, terminal secret redaction, ICE batching, and signaling back-pressure. The 5 skips are the LiveKit integration + capture tests, which run green against <code>livekit-server --dev</code> (they skip rather than fail when it's absent). See <code>TESTING.md</code> for the full map.</p>
   </section>
 
   <section id="server">
@@ -367,21 +367,31 @@ docker compose up">Copy</button></div>
   </section>
 
   <section id="apps">
-    <h2><span class="num">05</span> The apps <span class="tag pending" style="font-size:11px;margin-left:4px"><span class="dot"></span>pending hardware</span></h2>
-    <p class="sub">Here's the honest part. The macOS and iOS apps are scaffolded but not yet buildable as products, and several pieces fundamentally can't be verified without paired devices.</p>
-    <p>Once the Xcode project layer is added, the apps will build and run via:</p>
+    <h2><span class="num">05</span> The apps <span class="tag ok" style="font-size:11px;margin-left:4px"><span class="dot"></span>runs today</span></h2>
+    <p class="sub">The macOS call app builds and runs. Generate the Xcode project from <code>Apps/project.yml</code> (the <code>.xcodeproj</code> is generated, not committed), build, and launch two instances for a real call.</p>
     <div class="cmd">
-      <div class="cmd-head"><span class="label">planned — not yet present</span></div>
-      <pre><span class="p">$</span> xcodebuild -scheme JoeScreen-macOS -destination 'platform=macOS' build
-<span class="p">$</span> xcodebuild -scheme JoeScreen-iOS   -destination 'generic/platform=iOS' build</pre>
+      <div class="cmd-head"><span class="label">the demo — one Mac, two instances</span><button class="copy" data-copy="brew install livekit && livekit-server --dev &
+xcodegen generate --spec Apps/project.yml
+xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-macOS -derivedDataPath build build
+APP=build/Build/Products/Debug/JoeScreen.app
+open -n &quot;$APP&quot; --args --join-url ws://localhost:7880 --room demo --identity &quot;$(uuidgen)&quot;
+open -n &quot;$APP&quot; --args --join-url ws://localhost:7880 --room demo --identity &quot;$(uuidgen)&quot;">Copy</button></div>
+      <pre><span class="p">$</span> brew install livekit &amp;&amp; livekit-server --dev &amp;
+<span class="p">$</span> xcodegen generate --spec Apps/project.yml
+<span class="p">$</span> xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-macOS -derivedDataPath build build
+<span class="p">$</span> APP=build/Build/Products/Debug/JoeScreen.app
+<span class="p">$</span> open -n "$APP" --args --join-url ws://localhost:7880 --room demo --identity "$(uuidgen)"
+<span class="p">$</span> open -n "$APP" --args --join-url ws://localhost:7880 --room demo --identity "$(uuidgen)"
+<span class="c"># A: Share → pick a window (grant Screen Recording once).  B: watch it live.</span></pre>
     </div>
-    <p>Why you can't just run them yet:</p>
+    <p>The iOS viewer (viewer + voice only) builds for the simulator with <code>xcodebuild -scheme JoeScreen-iOS -destination 'generic/platform=iOS Simulator' build</code>.</p>
+    <p>The handful of things that still need a human or paired hardware:</p>
     <ul>
-      <li><b>Input injection forces a special build.</b> Synthesizing mouse/keyboard on the target Mac needs the Accessibility (<code>PostEvent</code>) permission, which sandboxed apps can't hold — so the Mac app must ship as a <b>notarized Developer-ID</b> app outside the App Store. That needs your signing certificate.</li>
-      <li><b>SharePlay can't be tested in one place.</b> A real session needs <b>two Macs plus an iPad on different iCloud accounts</b> — it cannot run in a single simulator.</li>
-      <li><b>iOS can share and control, but can't be controlled.</b> There's no public API to inject input into other apps on iOS. That asymmetry is permanent and built into the design.</li>
+      <li><b>One-time TCC grants.</b> The sharer needs Screen&nbsp;Recording; voice needs the mic. These are system dialogs a person approves once on the dev Mac.</li>
+      <li><b>SharePlay runtime.</b> The coordination layer compiles + is unit-tested against a fake, but a real session needs <b>two devices on different iCloud accounts</b> and the group-session entitlement — it cannot run in one place.</li>
+      <li><b>iOS can be a viewer, never a controller.</b> There's no public API to inject input into other apps on iOS. That asymmetry is permanent and built into the design.</li>
     </ul>
-    <p>Every one of these, plus the full F1–F14 feature acceptance and the ≤150&nbsp;ms latency target, is written up as a <b>pending human run-book</b> in <code>TESTING.md</code>. Nothing there is marked done until it's actually observed on hardware.</p>
+    <p>Every remaining item, plus the full F1–F14 acceptance and the ≤150&nbsp;ms latency target, is a <b>pending run-book</b> in <code>TESTING.md</code>. Nothing there is marked done until it's actually observed.</p>
   </section>
 
   <section id="architecture">
@@ -427,10 +437,9 @@ docker compose up">Copy</button></div>
   <section id="roadmap">
     <h2><span class="num">07</span> Where this is on the road</h2>
     <ol class="phases">
-      <li class="done"><b>Phase 0 — Foundation.</b> <span>API verification, green build + 84 tests, architecture &amp; decision docs, pinned deps, server infra. <em>You are here.</em></span></li>
-      <li><b>Phase 1 — Vertical slice.</b> <span>One Mac shares a window; another sees it as a native window over the real transport.</span></li>
-      <li><b>Phase 2 — Multi-share, cursors, relay.</b> <span>Simultaneous window sharing, multi-cursor presence, iPad viewer.</span></li>
-      <li><b>Phase 3 — Remote control, clipboard, security.</b> <span>Cross-machine input with owner-side authorization; byte-intact code paste.</span></li>
+      <li class="done"><b>Phase 0 — Foundation.</b> <span>API verification, green build + tests, architecture &amp; decision docs, pinned deps, server infra.</span></li>
+      <li class="done"><b>Phase 1 — Working calls.</b> <span>LiveKit transport (verified A→B video over a live SFU), ScreenCaptureKit capture, the macOS call app (share → live native window), voice, cursors, mirrored state, SharePlay coordination layer, iOS viewer. <em>You are here.</em></span></li>
+      <li><b>Phase 2 — Remote control, clipboard, security.</b> <span>Cross-machine input via the tested <code>InputAuthorizer</code> + coordinate clamp; byte-intact code paste.</span></li>
       <li><b>Phase 4 — Draw &amp; shared terminal.</b> <span>Ink annotations; a PTY streamed as text (far lower latency than video).</span></li>
       <li><b>Phase 5 — iOS sharing &amp; polish.</b> <span>Broadcast extension, fallback voice, rooms &amp; invites.</span></li>
       <li><b>Phase 6 — Hardening at scale.</b> <span>Reconnection, the 3–10 person session at the bound, full hardware test pass.</span></li>
