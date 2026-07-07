@@ -11,9 +11,15 @@ hardware says PENDING.
 ### Status: ✅ GREEN (2026-07-07)
 
 ```
-swift build     → Build complete (5 targets, Swift 6 language mode + StrictConcurrency)
-swift test      → Executed 84 tests, 0 failures
+swift build     → Build complete (6 library targets; JoeScreenKit at Swift 6 + StrictConcurrency,
+                  JoeScreenLiveKit at Swift 5 per-target per D1)
+swift test      → Executed 99 tests, 0 failures
+                  (84 Phase-0 + 15 M0: 11 Chunker, 1 SequenceTracker out-of-order,
+                   3 WireProtocol coordination-state/coverage, 1 LiveKit link-check)
 ```
+
+The LiveKit integration suite (`JoeScreenLiveKitTests`, M2) is SEPARATE and SKIPS unless
+`LIVEKIT_URL` is set — see the M2 section below. The count above is the offline gate.
 
 Run it yourself:
 ```bash
@@ -26,7 +32,7 @@ swift test
 | Suite | Asserts |
 |---|---|
 | `WireProtocolRoundTripTests` (8) | Every payload encodes→decodes byte-stable; envelope versioning + **unknown-kind tolerance** (skip, not fatal); `seq` present exactly on kinds whose channel requires it; kind-mismatch on unpack; multi-line UTF-8 code paste byte-intact; the full channel matrix (cursor=unreliable/unordered … input=reliable/ordered+seq). |
-| `SequenceTrackerTests` (7) | In-order accept, duplicate drop, gap/loss detection with the missing range, out-of-order handling, per-sender independence, re-baseline on forget, monotonic generator. |
+| `SequenceTrackerTests` (8) | In-order accept, duplicate drop, gap/loss detection with the missing range, **out-of-order-arrival-reads-as-duplicate** (M0: the unreachable `.outOfOrder` case was removed — a behind-cursor seq is dropped as `.duplicate` on the never-stalling ordered channel), per-sender independence, re-baseline on forget, monotonic generator. |
 | `CoordinateMapperTests` (6) | Normalized→global mapping, corner/center correctness, **out-of-bounds clamp (the security clamp)**, AppKit bottom-left→CG top-left flip, local-resize-invariance, round-trip. |
 | `InputAuthorizerTests` (11) | Happy-path inject + **every deny path**: spoofed sender (peer-identity mismatch), global-disabled, Watch mode (incl. default-is-Watch), no/expired write capability, unknown window, single-active-controller lock blocks others, lock holder injects, atomic hand-off. |
 | `AdmissionControllerTests` (6) | SFU admit-under-budget, degrade-over-budget, refuse-below-floor, **encode-session cap refuses regardless of bandwidth**, mesh (N−1) multiplier, decode-window cap. |

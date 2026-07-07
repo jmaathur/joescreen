@@ -36,6 +36,24 @@ final class SequenceTrackerTests: XCTestCase {
         XCTAssertEqual(t.offer(sender: a, seq: 12), .duplicate)
     }
 
+    // Out-of-order handling on a never-stalling ordered channel: a seq that arrives BEHIND the
+    // accepted cursor (whether a true duplicate or a reordered late arrival) is dropped as
+    // `.duplicate`. This replaces the removed unreachable `.outOfOrder` case (M0).
+    func testOutOfOrderArrivalReadsAsDuplicate() {
+        var t = SequenceTracker()
+        XCTAssertEqual(t.offer(sender: a, seq: 10), .accept)
+        XCTAssertEqual(t.offer(sender: a, seq: 11), .accept)
+        XCTAssertEqual(t.offer(sender: a, seq: 12), .accept)
+        // 11 arrives again, reordered behind the cursor → dropped, cursor unchanged.
+        XCTAssertEqual(t.offer(sender: a, seq: 11), .duplicate)
+        XCTAssertEqual(t.lastSeq(for: a), 12)
+        // An even-older reordered arrival is likewise dropped.
+        XCTAssertEqual(t.offer(sender: a, seq: 8), .duplicate)
+        XCTAssertEqual(t.lastSeq(for: a), 12)
+        // The stream continues in order after the reordering noise.
+        XCTAssertEqual(t.offer(sender: a, seq: 13), .accept)
+    }
+
     func testPerSenderIndependence() {
         var t = SequenceTracker()
         _ = t.offer(sender: a, seq: 1)

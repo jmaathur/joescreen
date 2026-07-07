@@ -168,3 +168,36 @@ public struct DrawUndo: WireMessage {
         self.authorID = authorID; self.windowID = windowID
     }
 }
+
+// MARK: - Coordination state (reliable / ordered) — M0
+
+/// A full mirrored `RoomModel` snapshot broadcast by the sharer over the `state` channel. Receivers
+/// apply it only if `model.revision` is newer than their current copy (last-writer-wins), so
+/// reordered/stale snapshots are dropped. This is the durable, self-contained state message a late
+/// joiner needs to catch up in one shot (spec §M0 / D9 / RoomModel sync model).
+public struct RoomSnapshot: WireMessage {
+    public static let kind: MessageKind = .roomSnapshot
+    public var model: RoomModel
+    public init(model: RoomModel) { self.model = model }
+}
+
+/// A discrete share/unshare notification on the `state` channel. Snapshots carry authoritative
+/// state; share events let peers react to a single window appearing/disappearing without diffing a
+/// whole snapshot (e.g. to open/close a native viewer window promptly). `revision` is the
+/// `RoomModel.revision` the event corresponds to, so a peer can order it against snapshots.
+public struct ShareEvent: WireMessage {
+    public static let kind: MessageKind = .shareEvent
+    public enum Action: String, Codable, Sendable, Equatable {
+        case shared     // a window became shared
+        case unshared   // a window stopped being shared
+    }
+    public var action: Action
+    public var windowID: WindowID
+    public var ownerID: ParticipantID
+    /// The `RoomModel.revision` at which this event took effect (for ordering against snapshots).
+    public var revision: UInt64
+    public init(action: Action, windowID: WindowID, ownerID: ParticipantID, revision: UInt64) {
+        self.action = action; self.windowID = windowID
+        self.ownerID = ownerID; self.revision = revision
+    }
+}

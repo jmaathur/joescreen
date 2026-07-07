@@ -10,13 +10,19 @@ import Foundation
 /// Sequences are `UInt64` and may start at any value; only monotonic *increase* is assumed.
 public struct SequenceTracker: Sendable {
     /// Outcome of offering one message's (sender, seq) to the tracker.
+    ///
+    /// Note on out-of-order handling: on a strictly-ordered channel we advance the accepted cursor
+    /// to the highest seq seen and never stall. A seq that arrives *behind* the cursor (`seq <= last`)
+    /// is therefore already superseded and reported as `.duplicate` — there is no distinct
+    /// "out of order, reject and wait" outcome, because we never wait. (A previously-declared
+    /// `.outOfOrder` case was unreachable — `seq <= last` returns `.duplicate` first — and was
+    /// removed in M0.)
     public enum Decision: Equatable, Sendable {
         /// The next expected message — accept and inject.
         case accept
-        /// A duplicate or already-superseded seq — drop silently.
+        /// A duplicate, an already-superseded (behind-cursor) seq, or a late in-gap arrival — drop
+        /// silently. This subsumes the old `.outOfOrder` case for a never-stalling ordered channel.
         case duplicate
-        /// Arrived before an expected earlier seq — reject (never inject out of order).
-        case outOfOrder(expected: UInt64, got: UInt64)
         /// Accepted, but a gap preceded it: `missing` seqs were lost. Caller may request resend
         /// or surface degraded input; the message itself is still accepted (we don't stall).
         case gap(missing: ClosedRange<UInt64>)
@@ -41,7 +47,9 @@ public struct SequenceTracker: Sendable {
         }
 
         if seq <= last {
-            // Already saw this or an earlier one: duplicate/superseded.
+            // Behind the cursor: already saw this or an earlier one, OR it arrived out of order
+            // after we advanced past it. On a never-stalling ordered channel both are handled
+            // identically — drop it. (This is where the old unreachable `.outOfOrder` case folded in.)
             return .duplicate
         }
 

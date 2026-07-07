@@ -32,15 +32,21 @@ let package = Package(
         .library(name: "JoeScreenCaptureMac", targets: ["JoeScreenCaptureMac"]),
         .library(name: "JoeScreenInputMac", targets: ["JoeScreenInputMac"]),
         .library(name: "JoeScreenUI", targets: ["JoeScreenUI"]),
+        // The ONLY target that links LiveKit — the concrete `MediaTransport` adapter (D3/R22).
+        .library(name: "JoeScreenLiveKit", targets: ["JoeScreenLiveKit"]),
     ],
     dependencies: [
-        // NOTE: dependencies are declared but the default `swift build`/`swift test` gate targets
-        // (JoeScreenKitCore, tests) do NOT link them — the pure-logic seams stay dependency-free so
-        // the machine gate is fast and offline. LiveKit/SwiftTerm are consumed only by the
-        // transport/terminal integration targets and the Xcode app layer.
+        // NOTE: the default `swift build`/`swift test` gate targets (`JoeScreenKit` + its tests, and
+        // Bridge/CaptureMac) do NOT link LiveKit — the pure-logic seams stay dependency-free so the
+        // machine gate is fast and offline. LiveKit is consumed ONLY by the `JoeScreenLiveKit`
+        // adapter target (and, transitively, the Xcode app layer), which keeps the "exactly one
+        // libwebrtc in the process" rule (R22) enforced by the dependency graph.
         //
-        // Uncomment to resolve against the network (pins are real tags verified 2026-07):
-        // .package(url: "https://github.com/livekit/client-sdk-swift.git", exact: "2.15.1"),
+        // Resolved against the network (pins are real tags verified 2026-07); `Package.resolved` is
+        // committed so subsequent resolves are reproducible/offline.
+        .package(url: "https://github.com/livekit/client-sdk-swift.git", exact: "2.15.1"),
+        // SwiftTerm (F12 terminal) and swift-certificates (LAN QUIC TLS) stay dark until their
+        // milestones — uncomment when F12 / the LAN mesh path are built:
         // .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.13.0"),
         // .package(url: "https://github.com/apple/swift-certificates.git", exact: "1.19.3"),
     ],
@@ -91,6 +97,23 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
         ),
 
+        // ── JoeScreenLiveKit: the one and only LiveKit-linking target (D3/D7/R22). ──
+        // The concrete `LiveKitTransport` actor conforming to JoeScreenKit's `MediaTransport`
+        // protocol lives here so JoeScreenKit stays dependency-free and "exactly one libwebrtc in
+        // the process" is guaranteed by the dependency graph. Swift 5 language mode per-target:
+        // LiveKit's 2.15.1 public API is not fully Swift-6-strict-concurrency clean, and D1
+        // pre-authorizes a per-target Swift-5 fallback for SDK-adjacent targets (JoeScreenKit itself
+        // stays Swift 6). Recorded in DECISIONS.md D1.
+        .target(
+            name: "JoeScreenLiveKit",
+            dependencies: [
+                "JoeScreenKit",
+                .product(name: "LiveKit", package: "client-sdk-swift"),
+            ],
+            path: "Sources/JoeScreenLiveKit",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+
         // ── Tests: the machine gate. All pure logic, no hardware, no network. ──
         .testTarget(
             name: "JoeScreenKitTests",
@@ -109,6 +132,18 @@ let package = Package(
             dependencies: ["JoeScreenCaptureMac"],
             path: "Tests/JoeScreenCaptureMacTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        // ── LiveKit integration tests (M2). These need a running SFU: every test SKIPS (not fails)
+        // unless `LIVEKIT_URL` is set in the environment, so the offline machine gate stays green.
+        // Run against a dev server with:
+        //   livekit-server --dev &
+        //   LIVEKIT_URL=ws://localhost:7880 swift test --filter JoeScreenLiveKitTests
+        .testTarget(
+            name: "JoeScreenLiveKitTests",
+            dependencies: ["JoeScreenLiveKit", "JoeScreenKit"],
+            path: "Tests/JoeScreenLiveKitTests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
 )

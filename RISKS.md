@@ -71,6 +71,13 @@ pause-vs-idle behind a protocol; runtime probe procedure per macOS version in `T
 ### R14 — SCStreamConfiguration.pixelFormat default is undocumented · **low**
 **Mitigation:** always set `pixelFormat` explicitly (420v) and debug-assert the received
 `CVPixelBuffer` format.
+**VERIFIED 2026-07-07 (M0, LiveKit 2.15.1 tag source):** `VideoCapturer.supportedPixelFormats`
+(`Sources/LiveKit/Track/Capturers/VideoCapturer.swift:55–59`) is documented to include
+`kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange` (420v), `…FullRange`, `32BGRA`, `32ARGB`, and
+`BufferCapturer.capture` (`VideoCapturer.swift:220–225`) validates the buffer against that list and
+**silently returns (skips the frame)** on a mismatch — which then manifests as the "≥1 frame before
+publish" timeout, exactly the R14/§3 hazard. ⇒ M3 locks the SCStream to 420v and debug-asserts it;
+this closes R14 for the LiveKit path.
 
 ### R15 — VideoToolbox low-latency rate-control specifics unverified · **low**
 (a) whether low-latency mode *requires* an explicit `AverageBitRate` (WWDC21 implies it applies a
@@ -108,6 +115,21 @@ interrupted (device locked)"; never assume the extension survives lock.
 Relies on a private view hierarchy.
 **Mitigation:** user-tap picker is the SUPPORTED path; the hack lives behind a nil-safe helper that
 degrades to the real picker; Control Center documented as the always-works route.
+
+### R31 — `contentHint` is NOT exposed by LiveKit 2.15.1 · **medium** · VERIFIED (M0)
+D5's legibility invariant `contentHint = .detail` (a WebRTC `MediaStreamTrack.contentHint` lever that
+tells the encoder "this is detailed screen content, prioritize sharpness over smoothness") is
+**unreachable through the LiveKit Swift SDK at the pinned 2.15.1 tag** — a full-source grep for
+`contentHint` returns ZERO hits (`Sources/LiveKit/**`). `VideoPublishOptions` exposes
+`simulcast`/`preferredCodec`/`degradationPreference` but no content hint; `createBufferTrack` takes
+`name`/`source`/`options`/`reportStatistics` only.
+**Mitigation:** the closest available lever is `source: .screenShareVideo` on the buffer track
+(LiveKit routes screen-share sources through screen-content-tuned paths) plus
+`degradationPreference: .maintainResolution` (verified present:
+`Sources/LiveKit/Types/DegradationPreference.swift:28`) and `simulcast: false`. D5's contentHint
+invariant is recorded as unachievable through the SDK; if legibility misses the bar in the codec A/B
+(H4), the fallback is raw `VTCompressionSession` encode off the supported path (R23), or an SDK bump
+that exposes the hint. No code depends on `contentHint` existing.
 
 ### R21 — ReplayKit deprecated at 27.0 · **medium**
 Current doc metadata marks ReplayKit "no longer supported" at 27.0, with ScreenCaptureKit arriving on

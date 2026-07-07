@@ -15,6 +15,13 @@ or a running SFU). Each maps to a row in `TESTING.md`.
 implementing from memory (VideoToolbox low-latency, ScreenCaptureKit, CGEvent injection) and cannot be
 verified in this environment without paired hardware / TCC grants. They are written as the FIRST code
 of Phase 0 on real hardware, per the run-book. Writing unverifiable framework code here would risk the
-"never fabricate verified" rule. The seams they'll build against already exist and are tested:
-`AdmissionController`, `CodecSelector`, `VTLowLatencyH264Encoder` (wrapper stub), `EventInjector`
-(wrapper stub).
+"never fabricate verified" rule.
+
+**Seam status (corrected 2026-07-07):** the pure-logic seams these spikes build against exist and are
+tested — `AdmissionController`, `CodecSelector`, `PauseDetector`, `EncodedFrameRingBuffer`. The
+framework wrappers `VTLowLatencyH264Encoder` and `EventInjector` do **NOT** exist yet (an earlier
+draft of this file wrongly listed them as "wrapper stubs"); they are written when their milestones
+arrive — `EventInjector` at the input-injection phase (F4/F5), the encoder wrapper only if the
+LiveKit-managed encode path (M2/M3, which owns codec selection through `VideoPublishOptions`) proves
+insufficient for the D5 legibility bar. The M2+ media path uses LiveKit's `BufferCapturer` publish,
+not a hand-rolled `VTCompressionSession`.

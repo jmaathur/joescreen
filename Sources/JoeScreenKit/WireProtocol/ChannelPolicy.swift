@@ -9,6 +9,10 @@ public enum DataChannel: String, Codable, Sendable, CaseIterable {
     case clipboard
     case terminal
     case draw
+    /// Coordination state (M0): reliable/ordered RoomModel snapshots + share/unshare events. Unlike
+    /// `input` it carries no monotonic sequence — ordering + last-writer-wins on `RoomModel.revision`
+    /// resolve staleness, so `requiresSequence == false`.
+    case state
 }
 
 /// Whether a channel guarantees delivery.
@@ -47,6 +51,8 @@ public struct ChannelPolicy: Sendable, Equatable {
         case .terminal:  return ChannelPolicy(channel: .terminal,  reliability: .reliable,   ordering: .ordered)
         // Draw ink: reliable, ordered within each author's stroke stream.
         case .draw:      return ChannelPolicy(channel: .draw,      reliability: .reliable,   ordering: .orderedPerAuthor)
+        // Coordination state: reliable + ordered; staleness resolved by RoomModel.revision, no seq.
+        case .state:     return ChannelPolicy(channel: .state,     reliability: .reliable,   ordering: .ordered)
         }
     }
 

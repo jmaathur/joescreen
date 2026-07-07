@@ -93,5 +93,77 @@ final class WireProtocolRoundTripTests: XCTestCase {
         XCTAssertEqual(MessageKind.drawOp.policy.ordering, .orderedPerAuthor)
         // Capability grants share the input channel so they serialize with the input they gate.
         XCTAssertEqual(MessageKind.capabilityGrant.channel, .input)
+        // M0 coordination-state channel: reliable + ordered, but NO per-sender sequence (staleness
+        // resolved by RoomModel.revision + last-writer-wins).
+        XCTAssertEqual(MessageKind.roomSnapshot.policy.channel, .state)
+        XCTAssertEqual(MessageKind.shareEvent.policy.channel, .state)
+        XCTAssertEqual(MessageKind.roomSnapshot.policy.reliability, .reliable)
+        XCTAssertEqual(MessageKind.roomSnapshot.policy.ordering, .ordered)
+        XCTAssertFalse(MessageKind.roomSnapshot.policy.requiresSequence)
+        XCTAssertFalse(MessageKind.shareEvent.policy.requiresSequence)
+        // Every channel — including the new `state` channel — has a total policy (six channels).
+        XCTAssertEqual(DataChannel.allCases.count, 6)
+        for ch in DataChannel.allCases {
+            XCTAssertEqual(ChannelPolicy.policy(for: ch).channel, ch)
+        }
+    }
+
+    // M0: a full RoomModel snapshot round-trips byte-stable on the `state` channel and carries an
+    // intact revision counter for last-writer-wins.
+    func testRoomSnapshotRoundTrip() throws {
+        var model = RoomModel()
+        let owner = UUID()
+        let win = UUID()
+        model.addShare(win, owner: owner)
+        model.setControlMode(.control, participant: sender, window: win)
+        model.setWriteAccess(true, participant: sender, window: win)
+        model.setPauseState(.paused, window: win)
+        let snap = RoomSnapshot(model: model)
+        let env = try WireCodec.pack(snap, sender: sender)
+        XCTAssertEqual(env.kind, .roomSnapshot)
+        XCTAssertEqual(env.kind?.channel, .state)
+        XCTAssertNil(env.seq, "state channel does not require a seq")
+        let back = try WireCodec.unpack(env, as: RoomSnapshot.self)
+        XCTAssertEqual(back, snap)
+        XCTAssertEqual(back.model.revision, model.revision)
+        XCTAssertEqual(back.model.owner(of: win), owner)
+        XCTAssertEqual(back.model.pauseState(of: win), .paused)
+    }
+
+    // M0: share/unshare events round-trip on the `state` channel.
+    func testShareEventRoundTrip() throws {
+        let owner = UUID(), win = UUID()
+        let shared = ShareEvent(action: .shared, windowID: win, ownerID: owner, revision: 3)
+        let env = try WireCodec.pack(shared, sender: sender)
+        XCTAssertEqual(env.kind, .shareEvent)
+        XCTAssertEqual(env.kind?.channel, .state)
+        XCTAssertNil(env.seq)
+        XCTAssertEqual(try WireCodec.unpack(env, as: ShareEvent.self), shared)
+
+        let unshared = ShareEvent(action: .unshared, windowID: win, ownerID: owner, revision: 4)
+        let env2 = try WireCodec.pack(unshared, sender: sender)
+        XCTAssertEqual(try WireCodec.unpack(env2, as: ShareEvent.self), unshared)
+    }
+
+    // Round-trip coverage for the previously-untested payloads (gap #6 in the inventory).
+    func testCapabilityAndDrawPayloadsRoundTrip() throws {
+        let p = UUID(), w = UUID()
+        let grant = CapabilityGrant(participantID: p, windowID: w, rights: [.write, .draw], expiry: 99.5)
+        let genv = try WireCodec.pack(grant, sender: sender, seq: 1)
+        XCTAssertEqual(try WireCodec.unpack(genv, as: CapabilityGrant.self), grant)
+
+        let revoke = CapabilityRevoke(participantID: p, windowID: w)
+        let renv = try WireCodec.pack(revoke, sender: sender, seq: 2)
+        XCTAssertEqual(try WireCodec.unpack(renv, as: CapabilityRevoke.self), revoke)
+
+        let op = DrawOp(authorID: p, authorSeq: 5, windowID: w,
+                        points: [NormalizedPoint(x: 0.1, y: 0.2), NormalizedPoint(x: 0.3, y: 0.4)],
+                        color: RGBAColor(r: 1, g: 0.5, b: 0, a: 1), width: 2.0)
+        let oenv = try WireCodec.pack(op, sender: sender)
+        XCTAssertEqual(try WireCodec.unpack(oenv, as: DrawOp.self), op)
+
+        let ctrl = TerminalControl(cols: 80, rows: 24, writerID: p)
+        let cenv = try WireCodec.pack(ctrl, sender: sender)
+        XCTAssertEqual(try WireCodec.unpack(cenv, as: TerminalControl.self), ctrl)
     }
 }
