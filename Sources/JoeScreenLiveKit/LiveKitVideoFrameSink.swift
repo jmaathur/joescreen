@@ -3,6 +3,7 @@ import CoreMedia
 import CoreVideo
 import LiveKit
 import JoeScreenKit
+import JoeScreenCaptureMac   // CMSampleBufferBox / CVPixelBufferBox (frame-box types)
 
 /// A `VideoFrameSink` (JoeScreenKit seam) backed by a LiveKit `BufferCapturer`. Capture submits
 /// `OpaqueVideoFrame`s here; this unboxes the platform buffer and feeds it to the capturer.

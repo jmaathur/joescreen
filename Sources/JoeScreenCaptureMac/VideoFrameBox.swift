@@ -11,7 +11,10 @@ import CoreVideo
 /// submitting. Nothing reads the boxed buffer concurrently on two isolation domains; it flows one
 /// way, capture → sink → SDK, and is released after the SDK copies it into its own pipeline.
 ///
-/// Kept in JoeScreenLiveKit (not JoeScreenKit) so the pure package never names CoreMedia/CoreVideo.
+/// Defined in JoeScreenCaptureMac (the frame PRODUCER) so JoeScreenKit stays CoreMedia-free. The
+/// LiveKit adapter (the CONSUMER) depends on this target and downcasts `OpaqueVideoFrame.box` to
+/// these types — a clean one-way dependency (capture → boxes ← transport); capture never imports
+/// LiveKit, preserving the one-libwebrtc rule (R22).
 
 /// A boxed `CMSampleBuffer` (the ScreenCaptureKit output type — M3).
 public struct CMSampleBufferBox: @unchecked Sendable {

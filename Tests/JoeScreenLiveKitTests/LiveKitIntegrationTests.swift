@@ -5,6 +5,7 @@ import AVFoundation
 import LiveKit
 @testable import JoeScreenLiveKit
 @testable import JoeScreenKit
+import JoeScreenCaptureMac   // CVPixelBufferBox / CMSampleBufferBox
 
 /// M2 integration suite. These need a running SFU — every test SKIPS (via `XCTSkip`) unless
 /// `LIVEKIT_URL` is set, so the offline `swift test` gate stays green. Run with:

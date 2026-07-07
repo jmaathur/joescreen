@@ -108,6 +108,10 @@ let package = Package(
             name: "JoeScreenLiveKit",
             dependencies: [
                 "JoeScreenKit",
+                // Frame-box types (CMSampleBufferBox/CVPixelBufferBox) that the adapter downcasts
+                // OpaqueVideoFrame.box into live in the capture target (the frame producer). One-way:
+                // the LiveKit adapter depends on capture boxes; capture never imports LiveKit (R22).
+                "JoeScreenCaptureMac",
                 .product(name: "LiveKit", package: "client-sdk-swift"),
             ],
             path: "Sources/JoeScreenLiveKit",
