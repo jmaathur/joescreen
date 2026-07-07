@@ -95,3 +95,50 @@ targets:
           - CFBundleURLName: com.joescreen.app.join
             CFBundleURLSchemes:
               - joescreen
+
+  # ── iOS app: viewer + voice ONLY (M8). NO control target — iOS can't be remote-controlled and
+  # can't inject into other apps (R6, permanent). Consumes JoeScreenKit + JoeScreenLiveKit; does NOT
+  # link the macOS-only capture/input targets. Standard sandboxed App-Store-eligible app.
+  JoeScreen-iOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: iOS/Sources
+      - path: Shared/Sources
+    dependencies:
+      - package: JoeScreen
+        product: JoeScreenKit
+      - package: JoeScreen
+        product: JoeScreenLiveKit
+      - package: JoeScreen
+        product: JoeScreenUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app.ios
+        PRODUCT_NAME: JoeScreen
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"   # iPhone + iPad
+        # iOS is always sandboxed; ad-hoc/automatic signing when TEAM_ID is unset.
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+    info:
+      path: iOS/Resources/Info-iOS.plist
+      properties:
+        CFBundleName: JoeScreen
+        CFBundleDisplayName: JoeScreen
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSMicrophoneUsageDescription: "JoeScreen uses your microphone for live voice during a shared session."
+        NSSupportsGroupActivities: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.joescreen.app.join
+            CFBundleURLSchemes:
+              - joescreen
