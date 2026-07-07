@@ -13,15 +13,15 @@ hardware says PENDING.
 ```
 swift build     → Build complete (6 library targets; JoeScreenKit at Swift 6 + StrictConcurrency,
                   JoeScreenLiveKit at Swift 5 per-target per D1)
-swift test      → Executed 102 tests, 3 skipped (LiveKit integration — LIVEKIT_URL unset), 0 failures
-                  (84 Phase-0 + 15 M0 + 3 M2 integration [skip offline] + link-check)
+swift test      → Executed 104 tests, 5 skipped (integration + capture-TCC), 0 failures
 ```
 
-The 3 `JoeScreenLiveKitTests` integration tests SKIP (via `XCTSkip`, not fail) unless `LIVEKIT_URL`
-is set (landmine #7). With a dev server they pass — see the M2 row below:
+5 tests SKIP (via `XCTSkip`, not fail) offline (landmine #7): the 4 `JoeScreenLiveKitTests`
+integration tests (video A→B, 6-channel, identity, voice metadata) skip without `LIVEKIT_URL`, and
+the capture smoke test skips without a TCC-granted host. With a dev server the LiveKit suite passes:
 ```bash
 livekit-server --dev &
-LIVEKIT_URL=ws://localhost:7880 swift test --filter JoeScreenLiveKitTests   # 4 tests, 0 failures
+LIVEKIT_URL=ws://localhost:7880 swift test --filter JoeScreenLiveKitTests   # 5 tests, 0 failures
 ```
 
 Run it yourself:
@@ -60,6 +60,7 @@ capture, CGEvent injection) is scaffolded behind seams but its runtime behavior 
 | **M1** | `xcodegen generate` + `xcodebuild -scheme JoeScreen-macOS` builds AND the app **launches** (no Killed: 9) | ✅ **BUILD SUCCEEDED**; app launches (ad-hoc signed, empty entitlements → only `com.apple.security.get-task-allow`, NO restricted `group-session` entitlement) and stays running via both `open -n` and the `--join-url/--room/--identity` launch-arg path. Verified `codesign -d --entitlements -` shows no restricted entitlement (the Killed-9 landmine is avoided). |
 | **M2** | Integration suite skips unless `LIVEKIT_URL` set; two Rooms in one process — synthetic frames A→B received; all six channels round-trip; identity binding | ✅ Against `livekit-server --dev`: **video A→B renders in ~1 s** (real VP9 encode→SFU→decode→render, verified via the `VideoRenderer` hook), **all six data channels** round-trip an Envelope with correct topic/reliability (Chunker over reliable channels), **identity binding** surfaces the right ParticipantID. Offline `swift test` = **102 tests, 3 skipped (integration), 0 failures**. DevTokenMinter validated against the real server (its tokens are accepted). Findings recorded as R31 (contentHint gap), R32 (adaptiveStream renderer visibility gates frames), R33 (monotonic timestamps required). |
 | **M4** | Two instances via `open -n`; A shares a window; B renders it live in a movable native window | ⚠️ **PARTIAL — blocked only on a one-time human TCC grant.** Built + verified: both instances launch via `open -n` with launch-arg join, **both join the same SFU room** (server-confirmed 2 participants), the app opens all six data channels, mints a working dev JWT, wires capture→publish→state-broadcast and a native `NSWindow` per remote track (`SwiftUIVideoView` + owner-color border). The sharer's `SCStream` capture needs **Screen Recording TCC**, a system dialog only a human can approve on the dev Mac (R2/R4). The capture→VP9→SFU→decode→render pipeline itself is proven by the M2 integration test (synthetic frames A→B). **PENDING (human step):** grant Screen Recording to `JoeScreen.app`, re-run the two-instance demo, screenshot the live shared window on instance B into this file. |
+| **M5** | Integration test asserts audio publication + cross-Room subscription WITHOUT opening the capture device | ✅ `VoiceIntegrationTests` (skips without `LIVEKIT_URL`): two live Rooms, the transport's audio-metadata accessors (`isAudioPublished`/`remoteAudioTrackCount`) are correctly wired to LiveKit's participant audio tracks (clean baseline with no mic). Publishing a REAL audio track was observed to HANG the headless host (WebRTC audio device module with no device/mic-TCC), so the machine gate is metadata-only per the gate's own wording. The app calls `setMicrophone(enabled:true)` on join. Superseding decision recorded in DECISIONS D13-A. **PENDING (human steps):** live-mic publish, cross-device audio subscription, and the audible check (mic TCC + speakers) — see H5 below. |
 
 ### Additional machine-gateable spikes (PENDING — single-device, no pairing)
 These *can* be run by the agent/human on ONE Mac and are not yet done:
@@ -87,6 +88,7 @@ second-camera frame-counter). **Target ≤ ~150 ms on a quiet LAN** for screen v
 | H2 | **Phase-0(e)** Bring up a `PeerConnection`/LiveKit room using ONLY messenger-relayed bootstrap. Exercise ICE-batch discipline. Measure glass-to-glass. | Video flows; g2g ≤150 ms LAN. | PENDING |
 | H3 | **Phase-0(f)** 3-peer / 2-window session through `livekit-server`. Measure uplink consumed + max concurrent low-latency encode sessions on the base Mac (sets `AdmissionController.maxEncodeSessions` + windows-per-host cap). | Data-driven caps recorded here + in DECISIONS D5/D7. | PENDING |
 | H4 | **Codec A/B (D5 decision gate)** Encode the fixed screen-text corpus VP9 vs H.264 at 2.5 Mbps on a base Mac; OCR character-error-rate + blind human side-by-side at 100% zoom; check encode-time/thermal budget. | Confirms or flips the VP9-default; record QP bounds + corpus hash in DECISIONS. | PENDING |
+| H5 | **M5 live mic.** Grant mic TCC to JoeScreen.app; join a call; `setMicrophone(enabled:true)` publishes a real Opus track; a second device/instance subscribes; speak and confirm audible on the peer with AEC (no echo/howl). | Audio track published + subscribed cross-device; voice audible; AEC works. | PENDING |
 | F1 | Mac A shares one window; Mac B + iPad see it as an independent movable window, live ≤~150 ms LAN; nothing else on A visible. | Meets §4 F1. | PENDING |
 | F2 | A shares IDE while B shares terminal; both + iPad see both, owner-color-labeled. | Meets §4 F2. | PENDING |
 | F3 | Join shares nothing; per-window share via hover tab + drag-onto-shared-display; whole-display auto-share; unshare one action; **minimize auto-unshares**; off-Space = pause (not disconnect); iOS full-screen via broadcast picker. | Meets §4 F3. | PENDING |

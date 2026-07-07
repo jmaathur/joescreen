@@ -162,6 +162,27 @@ access). Messages-started sessions get `AVAudioSession(.playAndRecord, .voiceCha
 with `setVoiceProcessingEnabled(true)` (set while stopped; required for AEC) + `AVAudioConverter`
 PCM↔Opus (48 kHz mono, 960 frames/packet = 20 ms) published as a LiveKit audio track.
 
+## D13-A — Voice on the LiveKit path uses the SDK's mic capture/AEC (supersedes D13's hand-built pipeline) · M5
+**SUPERSEDES D13** for the LiveKit/Direct-Mode/fallback voice path. Voice is carried by
+`localParticipant.setMicrophone(enabled:)` — LiveKit's SDK owns mic capture, echo cancellation
+(`AudioCaptureOptions.echoCancellation`), auto-gain, and noise suppression, and publishes an Opus
+audio track through the same SFU as video. This replaces D13's hand-built
+`AVAudioSession(.playAndRecord,.voiceChat)` + `AVAudioEngine(setVoiceProcessingEnabled)` +
+`AVAudioConverter` PCM↔Opus pipeline for every path where LiveKit is the transport.
+**Why:** the media plane is already LiveKit (D3/D4); routing voice through the same SDK gives AEC,
+device management, and Opus for free, with one publish/subscribe model for audio and video. Building a
+parallel AVAudioEngine+Opus pipeline would duplicate capture/AEC and add a second audio path to
+reconcile. `NSMicrophoneUsageDescription` is declared (M1); the app calls `setMicrophone(enabled:true)`
+on join.
+**D13's pipeline remains the reference** for any FUTURE non-LiveKit voice path (e.g. a
+FaceTime-carried SharePlay session where voice is automatic, or a LAN-mesh mode that doesn't run the
+LiveKit SDK). It is not deleted — it is the documented fallback lineage.
+**Verification:** the audio publish/subscribe metadata plumbing is machine-tested (two live Rooms,
+`isAudioPublished()`/`remoteAudioTrackCount()` correctly wired to LiveKit's participant audio tracks)
+WITHOUT opening the capture device — a headless host can't clear the mic-TCC prompt and publishing a
+real audio track starts the WebRTC audio device module, which hangs with no device. The live-mic
+publish + cross-device subscription + audible check are one-time local HUMAN steps (TESTING.md).
+
 ## D14 — Terminal (F12) is a first-class, separate TEXT path
 A real PTY spawned on the host Mac, raw bytes over the reliable/ordered `terminal` channel to
 SwiftTerm-rendered views on all peers (iOS is a full terminal client — text, not injection). Secret

@@ -203,16 +203,26 @@ public actor LiveKitTransport: MediaTransport {
     // MARK: - Voice (M5)
 
     /// Enable/disable the local microphone. LiveKit owns capture + AEC (supersedes D13's hand-rolled
-    /// pipeline for the LiveKit path — recorded in DECISIONS D13-A / M5).
+    /// AVAudioEngine+Opus pipeline for the LiveKit path — DECISIONS D13-A / M5). This opens the real
+    /// mic device and needs `NSMicrophoneUsageDescription` + mic TCC.
     public func setMicrophone(enabled: Bool) async throws {
-        try await room.localParticipant.setMicrophone(enabled: enabled)
+        _ = try await room.localParticipant.setMicrophone(enabled: enabled)
     }
 
-    /// Whether the local participant currently has a published microphone track (M5 test hook).
-    public func isMicrophonePublished() -> Bool {
-        room.localParticipant.trackPublications.values.contains {
-            $0.source == .microphone && $0.track != nil
+    /// Whether the local participant currently has a published audio track (M5 test hook — checks
+    /// publication metadata WITHOUT opening the capture device).
+    public func isAudioPublished() -> Bool {
+        room.localParticipant.audioTracks.contains { $0.track != nil }
+    }
+
+    /// Count of remote audio-track publications this participant currently sees (M5 cross-Room
+    /// subscription assertion — metadata only, no device access).
+    public func remoteAudioTrackCount() -> Int {
+        var count = 0
+        for participant in room.remoteParticipants.values {
+            count += participant.audioTracks.count
         }
+        return count
     }
 
     // MARK: - Codec context (D5)
