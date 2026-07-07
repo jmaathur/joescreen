@@ -35,12 +35,28 @@ struct RemoteVideoView: View {
                 // correctly by construction, so the SFU forwards frames (R32).
                 SwiftUIVideoView(window.track, layoutMode: .fit)
                     .ignoresSafeArea()
-                // Per-window cursor overlay for every remote participant (M6).
+                // Per-window cursor overlay for every remote participant (M6). Click-through:
+                // CursorOverlay uses allowsHitTesting(false) so it never intercepts local input.
                 CursorOverlay(windowID: window.windowID, size: geo.size)
             }
             .overlay(
                 Rectangle()
                     .strokeBorder(model.color(for: window.ownerID), lineWidth: 3))
+            // Outbound cursor (M6): report the LOCAL user's pointer over this remote window in
+            // normalized [0,1] coords so peers see it. Local window resizing doesn't change the
+            // normalized value (§3.4) — geo.size is the current view size, the pointer divides by it.
+            .onContinuousHover(coordinateSpace: .local) { phase in
+                switch phase {
+                case .active(let location):
+                    let nx = geo.size.width > 0 ? location.x / geo.size.width : 0
+                    let ny = geo.size.height > 0 ? location.y / geo.size.height : 0
+                    model.reportLocalCursor(
+                        windowID: window.windowID,
+                        point: NormalizedPoint(x: min(max(nx, 0), 1), y: min(max(ny, 0), 1)))
+                case .ended:
+                    break
+                }
+            }
         }
     }
 }

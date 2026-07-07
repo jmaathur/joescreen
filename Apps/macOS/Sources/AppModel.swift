@@ -248,6 +248,15 @@ public final class AppModel {
         windowManager.close(windowID)
     }
 
+    // MARK: - Cursors (M6)
+
+    /// Report the local user's pointer over a remote window; the pump coalesces + sends at ~60 fps.
+    public func reportLocalCursor(windowID: WindowID, point: NormalizedPoint) {
+        guard let pump = cursorPump else { return }
+        let ts = ProcessInfo.processInfo.systemUptime
+        Task { await pump.sendLocalCursor(windowID: windowID, point: point, timestamp: ts) }
+    }
+
     // MARK: - Sharing
 
     /// Present the ScreenCaptureKit picker and share the chosen window (M3/M4).
