@@ -1,0 +1,97 @@
+name: JoeScreen
+# XcodeGen spec for the JoeScreen app layer (DECISIONS D8). Generated with XcodeGen 2.42.0:
+#   xcodegen generate --spec Apps/project.yml
+# The generated Apps/JoeScreen.xcodeproj is gitignored — regenerate from this spec, which IS
+# committed. The .xcodeproj consumes the local SwiftPM package (one dir up) so `swift test` stays
+# the primary machine gate and the app layer only adds the product/entitlements/signing that Xcode
+# needs.
+
+options:
+  bundleIdPrefix: com.joescreen
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+  createIntermediateGroups: true
+  # Generate Info.plist files from the `info:` blocks below rather than committing raw plists.
+  generateEmptyDirectories: true
+
+# The local Swift package (Package.swift is in the repo root, one level above this spec).
+packages:
+  JoeScreen:
+    path: ..
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# Signing (M1 Killed-9 landmine).
+#
+# When TEAM_ID is UNSET (the demo/CI default): ad-hoc sign (`CODE_SIGN_IDENTITY = -`), do NOT
+# require signing, and ship the EMPTY entitlements file — the restricted group-session entitlement
+# in an ad-hoc-signed app with no provisioning profile is killed by AMFI at launch (Killed: 9) on
+# Apple Silicon. The group-session entitlement isn't needed until M7.
+#
+# When TEAM_ID IS set: pass it in the environment (`TEAM_ID=ABCDE12345 xcodegen generate ...`) so
+# ${TEAM_ID} substitutes into DEVELOPMENT_TEAM, then switch CODE_SIGN_ENTITLEMENTS to the
+# JoeScreen-macOS-team.entitlements file and set a real CODE_SIGN_IDENTITY. See README.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+settings:
+  base:
+    # ${TEAM_ID} expands from the environment; empty when unset (harmless for ad-hoc).
+    DEVELOPMENT_TEAM: ${TEAM_ID}
+    # Ad-hoc by default so the app launches with no profile. Override for a real team build.
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "YES"
+    ENABLE_HARDENED_RUNTIME: "YES"
+    SWIFT_VERSION: "6.0"
+
+targets:
+  # ── macOS app: the M1–M6 vertical slice (Direct Session Mode → live shared windows + voice). ──
+  JoeScreen-macOS:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: macOS/Sources
+      - path: Shared/Sources
+    dependencies:
+      - package: JoeScreen
+        product: JoeScreenKit
+      - package: JoeScreen
+        product: JoeScreenLiveKit
+      - package: JoeScreen
+        product: JoeScreenCaptureMac
+      - package: JoeScreen
+        product: JoeScreenInputMac
+      - package: JoeScreen
+        product: JoeScreenUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app
+        PRODUCT_NAME: JoeScreen
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        # Empty entitlements by default (Killed-9 avoidance). Swap to the -team file for a real team.
+        CODE_SIGN_ENTITLEMENTS: macOS/Resources/JoeScreen-macOS-empty.entitlements
+        # Non-sandboxed Developer-ID distribution (D6): App Sandbox deliberately absent.
+        ENABLE_APP_SANDBOX: "NO"
+    info:
+      path: macOS/Resources/Info-macOS.plist
+      properties:
+        CFBundleName: JoeScreen
+        CFBundleDisplayName: JoeScreen
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "14.0"
+        # SwiftUI app has no storyboard/nib; the @main App scene owns the window.
+        NSHighResolutionCapable: true
+        # Mic usage string (M5 voice via LiveKit setMicrophone; required or the app crashes on ask).
+        NSMicrophoneUsageDescription: "JoeScreen uses your microphone for live voice during a shared session."
+        # Camera string reserved for optional camera bubbles (F11); harmless to declare early.
+        NSCameraUsageDescription: "JoeScreen can share your camera as an optional video bubble."
+        # SharePlay support flag (M7). Declaring it is inert without the group-session entitlement.
+        NSSupportsGroupActivities: true
+        # Custom URL scheme for `joescreen://join?...` deep-link joins (Direct Session Mode, §1).
+        CFBundleURLTypes:
+          - CFBundleURLName: com.joescreen.app.join
+            CFBundleURLSchemes:
+              - joescreen

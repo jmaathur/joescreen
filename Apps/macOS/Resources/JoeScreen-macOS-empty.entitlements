@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  JoeScreen macOS — EMPTY entitlements (the default when TEAM_ID is unset).
+
+  M1 landmine (Killed: 9): the restricted `com.apple.developer.group-session` entitlement, in an
+  ad-hoc-signed app with NO provisioning profile, gets the binary killed by AMFI at launch on Apple
+  Silicon. So when TEAM_ID is unset we ship THIS empty file and CODE_SIGN_IDENTITY "-". The
+  group-session entitlement isn't needed until M7 (SharePlay); it lives in the TEAM_ID-gated
+  entitlements file and is only wired in when a real team + provisioning profile exist.
+
+  App Sandbox is DELIBERATELY omitted (D6): input injection via CGEvent (kTCCServicePostEvent /
+  Accessibility) is unavailable to sandboxed apps.
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

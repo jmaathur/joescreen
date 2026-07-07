@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  JoeScreen macOS — TEAM entitlements (used ONLY when a real TEAM_ID + provisioning profile exist).
+
+  Selected by pointing CODE_SIGN_ENTITLEMENTS at this file when TEAM_ID is set (see project.yml and
+  the README). Contains the restricted SharePlay entitlement (M7). Ad-hoc builds must NEVER use this
+  file — see JoeScreen-macOS-empty.entitlements for why (Killed: 9 / AMFI).
+
+  App Sandbox is DELIBERATELY omitted (D6): CGEvent injection needs kTCCServicePostEvent /
+  Accessibility, unavailable to sandboxed apps.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.developer.group-session</key>
+    <true/>
+</dict>
+</plist>

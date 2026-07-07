@@ -49,6 +49,13 @@ Anything requiring a network, a second device, a running SFU, or TCC grants. Tho
 The framework-touching code (SessionManager, LiveKitTransport, VTCompressionSession wrappers, SCStream
 capture, CGEvent injection) is scaffolded behind seams but its runtime behavior is unverifiable here.
 
+### Milestone machine-gate results (this session)
+
+| Milestone | Gate | Result |
+|---|---|---|
+| **M0** | `swift build && swift test` green (84+new) | ✅ 99 tests, 0 failures; LiveKit 2.15.1 resolved + `Package.resolved` committed. |
+| **M1** | `xcodegen generate` + `xcodebuild -scheme JoeScreen-macOS` builds AND the app **launches** (no Killed: 9) | ✅ **BUILD SUCCEEDED**; app launches (ad-hoc signed, empty entitlements → only `com.apple.security.get-task-allow`, NO restricted `group-session` entitlement) and stays running via both `open -n` and the `--join-url/--room/--identity` launch-arg path. Verified `codesign -d --entitlements -` shows no restricted entitlement (the Killed-9 landmine is avoided). |
+
 ### Additional machine-gateable spikes (PENDING — single-device, no pairing)
 These *can* be run by the agent/human on ONE Mac and are not yet done:
 - **Phase-0(b)** SCStream → VT low-latency H.264 encode → decode → `AVSampleBufferDisplayLayer` render, single device. Proves the capture/encode/decode/render pipeline end-to-end on one machine.
