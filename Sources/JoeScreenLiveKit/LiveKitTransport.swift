@@ -14,6 +14,11 @@ import JoeScreenKit
 ///   • Data: six topic-mapped channels (iterate `DataChannel.allCases`), reliability from ChannelPolicy,
 ///     Chunker for >14 KB reliable payloads.
 ///   • Identity: bind a ParticipantID to a transport identity string; parse remote identities back.
+/// A remote video track reference the app layer can hand to `SwiftUIVideoView(track)` for rendering,
+/// without the app naming LiveKit's `RemoteVideoTrack` type directly everywhere. It IS the LiveKit
+/// track (the app target links LiveKit); this alias documents the boundary.
+public typealias RemoteVideoTrackRef = RemoteVideoTrack
+
 public actor LiveKitTransport: MediaTransport {
 
     // MARK: - State

@@ -80,7 +80,23 @@ public actor WindowCaptureService: NSObject {
 
     // MARK: - Start / stop
 
-    /// Start capturing the given SCWindow, forwarding complete frames into `sink`.
+    /// Start capturing the window with the given OS `CGWindowID`, forwarding complete frames into
+    /// `sink`. Resolves the `SCWindow` INSIDE the actor so the non-Sendable object never crosses an
+    /// isolation boundary — this is the entry point callers should use (picker + --share-window-id).
+    public func start(cgWindowID: CGWindowID, sink: any VideoFrameSink) async throws {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let window = content.windows.first(where: { $0.windowID == cgWindowID }) else {
+            throw CaptureError.windowNotFound(cgWindowID)
+        }
+        try await start(window: window, sink: sink)
+    }
+
+    public enum CaptureError: Error, Equatable {
+        case windowNotFound(CGWindowID)
+    }
+
+    /// Start capturing the given SCWindow, forwarding complete frames into `sink`. Actor-internal;
+    /// callers use `start(cgWindowID:sink:)` to avoid crossing a non-Sendable SCWindow.
     public func start(window: SCWindow, sink: any VideoFrameSink) async throws {
         let filter = SCContentFilter(desktopIndependentWindow: window)
 

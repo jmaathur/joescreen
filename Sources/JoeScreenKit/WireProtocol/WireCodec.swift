@@ -16,6 +16,17 @@ public enum WireCodec {
 
     static func makeDecoder() -> JSONDecoder { JSONDecoder() }
 
+    /// Encode an envelope to its wire bytes (deterministic, sorted-keys JSON). This is what actually
+    /// rides `WireDataChannel.send`. Public so transport/app code has one canonical encode path.
+    public static func encode(_ envelope: Envelope) throws -> Data {
+        try makeEncoder().encode(envelope)
+    }
+
+    /// Decode wire bytes back into an envelope (unknown kinds decode to `kind == nil`, never throw).
+    public static func decode(_ data: Data) throws -> Envelope {
+        try makeDecoder().decode(Envelope.self, from: data)
+    }
+
     /// Pack a typed payload into an envelope on its correct channel.
     /// - Parameter seq: required iff `M.kind.policy.requiresSequence`; the caller (SequenceTracker
     ///   / send path) supplies the monotonic value. `pack` asserts the presence contract.

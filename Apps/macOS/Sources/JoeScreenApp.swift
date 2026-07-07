@@ -15,7 +15,23 @@ struct JoeScreenApp: App {
         // Parse launch args once, before any UI. CommandLine.arguments[0] is the executable path.
         let args = Array(CommandLine.arguments.dropFirst())
         let launchJoin = DirectJoinParameters.fromLaunchArguments(args)
-        _model = State(initialValue: AppModel(launchJoin: launchJoin))
+        // Optional --share-window-id <CGWindowID> to auto-share a window after joining (automation).
+        let shareWindowID = JoeScreenApp.parseShareWindowID(args)
+        _model = State(initialValue: AppModel(launchJoin: launchJoin, autoShareWindowID: shareWindowID))
+    }
+
+    /// Parse `--share-window-id <n>` (or `--share-window-id=<n>`) from the launch args.
+    static func parseShareWindowID(_ args: [String]) -> UInt32? {
+        var i = 0
+        while i < args.count {
+            let a = args[i]
+            if a == "--share-window-id", i + 1 < args.count { return UInt32(args[i + 1]) }
+            if a.hasPrefix("--share-window-id=") {
+                return UInt32(a.dropFirst("--share-window-id=".count))
+            }
+            i += 1
+        }
+        return nil
     }
 
     var body: some Scene {
