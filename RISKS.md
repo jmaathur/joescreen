@@ -131,6 +131,30 @@ invariant is recorded as unachievable through the SDK; if legibility misses the 
 (H4), the fallback is raw `VTCompressionSession` encode off the supported path (R23), or an SDK bump
 that exposes the hint. No code depends on `contentHint` existing.
 
+### R32 — adaptiveStream gates frame delivery on renderer visibility · **medium** · VERIFIED (M2)
+With `RoomOptions(adaptiveStream: true)` (R24, load-bearing), a subscribed remote video track
+receives NO frames unless at least one attached `VideoRenderer` reports
+`isAdaptiveStreamEnabled == true` AND a non-zero `adaptiveStreamSize`. Verified in
+`RemoteTrackPublication.swift:346–379`: the SDK computes `isEnabled` from
+`videoRenderers.containsOneOrMoreAdaptiveStreamEnabledRenderers()` + `largestSize()` and sets
+`videoTrack.shouldReceive = isEnabled`. Observed live: a renderer reporting `false`/`.zero` caused the
+SFU to forward exactly 0 useful frames; flipping it to `true` + a real size made frames flow.
+**Mitigation:** the app's on-screen `SwiftUIVideoView` reports this correctly by construction, so the
+M4 UI path is unaffected. Any CUSTOM renderer (headless capture-to-file, a test frame counter, an
+off-screen thumbnail) MUST report `isAdaptiveStreamEnabled = true` and a non-zero
+`adaptiveStreamSize` or it silently receives nothing. Documented in `LiveKitIntegrationTests`
+(`CountingRenderer`).
+
+### R33 — WebRTC drops video frames with non-increasing timestamps · **low** · VERIFIED (M2)
+Feeding `BufferCapturer.capture(_ pixelBuffer:, timeStampNs:)` a constant (e.g. 0) timestamp per
+frame makes WebRTC emit ~1 keyframe then go silent (the SFU reports `FEED_DRY`, ~0 packets forwarded)
+even when the pixel content changes. Timestamps must be monotonically increasing.
+**Mitigation:** `LiveKitVideoFrameSink` uses the frame's `timestampNanos` only when non-zero and
+otherwise lets the SDK stamp each frame from its own monotonic clock (`capture(_:)` overload). The
+ScreenCaptureKit path (M3) supplies real monotonic capture timestamps; callers/tests that don't care
+pass 0 to opt into the SDK clock. Both paths are monotonic. Verified: with the SDK clock, a synthetic
+A→B video stream renders on the receiver in ~1 s.
+
 ### R21 — ReplayKit deprecated at 27.0 · **medium**
 Current doc metadata marks ReplayKit "no longer supported" at 27.0, with ScreenCaptureKit arriving on
 iOS at 27.0 beta.

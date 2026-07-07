@@ -13,13 +13,16 @@ hardware says PENDING.
 ```
 swift build     → Build complete (6 library targets; JoeScreenKit at Swift 6 + StrictConcurrency,
                   JoeScreenLiveKit at Swift 5 per-target per D1)
-swift test      → Executed 99 tests, 0 failures
-                  (84 Phase-0 + 15 M0: 11 Chunker, 1 SequenceTracker out-of-order,
-                   3 WireProtocol coordination-state/coverage, 1 LiveKit link-check)
+swift test      → Executed 102 tests, 3 skipped (LiveKit integration — LIVEKIT_URL unset), 0 failures
+                  (84 Phase-0 + 15 M0 + 3 M2 integration [skip offline] + link-check)
 ```
 
-The LiveKit integration suite (`JoeScreenLiveKitTests`, M2) is SEPARATE and SKIPS unless
-`LIVEKIT_URL` is set — see the M2 section below. The count above is the offline gate.
+The 3 `JoeScreenLiveKitTests` integration tests SKIP (via `XCTSkip`, not fail) unless `LIVEKIT_URL`
+is set (landmine #7). With a dev server they pass — see the M2 row below:
+```bash
+livekit-server --dev &
+LIVEKIT_URL=ws://localhost:7880 swift test --filter JoeScreenLiveKitTests   # 4 tests, 0 failures
+```
 
 Run it yourself:
 ```bash
@@ -55,6 +58,7 @@ capture, CGEvent injection) is scaffolded behind seams but its runtime behavior 
 |---|---|---|
 | **M0** | `swift build && swift test` green (84+new) | ✅ 99 tests, 0 failures; LiveKit 2.15.1 resolved + `Package.resolved` committed. |
 | **M1** | `xcodegen generate` + `xcodebuild -scheme JoeScreen-macOS` builds AND the app **launches** (no Killed: 9) | ✅ **BUILD SUCCEEDED**; app launches (ad-hoc signed, empty entitlements → only `com.apple.security.get-task-allow`, NO restricted `group-session` entitlement) and stays running via both `open -n` and the `--join-url/--room/--identity` launch-arg path. Verified `codesign -d --entitlements -` shows no restricted entitlement (the Killed-9 landmine is avoided). |
+| **M2** | Integration suite skips unless `LIVEKIT_URL` set; two Rooms in one process — synthetic frames A→B received; all six channels round-trip; identity binding | ✅ Against `livekit-server --dev`: **video A→B renders in ~1 s** (real capture→VP9 encode→SFU→decode→render, verified via the `VideoRenderer` hook), **all six data channels** round-trip an Envelope with correct topic/reliability (Chunker over reliable channels), **identity binding** surfaces the right ParticipantID. Offline `swift test` = **102 tests, 3 skipped (integration), 0 failures**. DevTokenMinter validated against the real server (its tokens are accepted). Findings recorded as R31 (contentHint gap), R32 (adaptiveStream renderer visibility gates frames), R33 (monotonic timestamps required). |
 
 ### Additional machine-gateable spikes (PENDING — single-device, no pairing)
 These *can* be run by the agent/human on ONE Mac and are not yet done:
