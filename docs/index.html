@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JoeScreen — install &amp; run</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    /* neutrals biased slightly toward the teal accent (chosen, not defaulted) */
+    --bg:        #f7f6f3;
+    --bg-sunk:   #eeeee9;
+    --surface:   #ffffff;
+    --border:    #dcdbd4;
+    --ink:       #1a1d22;
+    --ink-soft:  #545a66;
+    --ink-faint: #868d99;
+    --accent:    #147a86;   /* SharePlay/screen teal */
+    --accent-bg: #e2f1f3;
+    --ok:        #2f8f57;   /* runs today */
+    --ok-bg:     #e3f2e8;
+    --pending:   #a76a17;   /* pending hardware */
+    --pending-bg:#f6ecd9;
+    --code-bg:   #f2f1ec;
+    --code-ink:  #24272e;
+
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Menlo", "Cascadia Code", "Consolas", monospace;
+    --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+
+    --measure: 68ch;
+    --radius: 9px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:        #0d0f14;
+      --bg-sunk:   #090a0e;
+      --surface:   #161922;
+      --border:    #262b36;
+      --ink:       #e7e9ee;
+      --ink-soft:  #a5adbb;
+      --ink-faint: #6c7482;
+      --accent:    #45c3d0;
+      --accent-bg: #10333a;
+      --ok:        #57c98a;
+      --ok-bg:     #123522;
+      --pending:   #e0a94e;
+      --pending-bg:#3a2c10;
+      --code-bg:   #10131a;
+      --code-ink:  #cfd4dd;
+    }
+  }
+  /* explicit toggle overrides must win in both directions */
+  :root[data-theme="light"] {
+    --bg:#f7f6f3; --bg-sunk:#eeeee9; --surface:#fff; --border:#dcdbd4;
+    --ink:#1a1d22; --ink-soft:#545a66; --ink-faint:#868d99;
+    --accent:#147a86; --accent-bg:#e2f1f3; --ok:#2f8f57; --ok-bg:#e3f2e8;
+    --pending:#a76a17; --pending-bg:#f6ecd9; --code-bg:#f2f1ec; --code-ink:#24272e;
+  }
+  :root[data-theme="dark"] {
+    --bg:#0d0f14; --bg-sunk:#090a0e; --surface:#161922; --border:#262b36;
+    --ink:#e7e9ee; --ink-soft:#a5adbb; --ink-faint:#6c7482;
+    --accent:#45c3d0; --accent-bg:#10333a; --ok:#57c98a; --ok-bg:#123522;
+    --pending:#e0a94e; --pending-bg:#3a2c10; --code-bg:#10131a; --code-ink:#cfd4dd;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--measure); margin: 0 auto; padding: 0 24px; }
+  main { padding-bottom: 96px; }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  /* ── header ── */
+  header {
+    border-bottom: 1px solid var(--border);
+    background:
+      radial-gradient(120% 140% at 100% 0%, var(--accent-bg) 0%, transparent 55%),
+      var(--bg-sunk);
+    padding: 56px 0 40px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+  .eyebrow::before { content: "› "; opacity: 0.65; }
+  h1 {
+    font-size: clamp(2.1rem, 6vw, 3rem);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin: 0 0 14px;
+    text-wrap: balance;
+    font-weight: 680;
+  }
+  .lede {
+    font-size: 1.16rem;
+    color: var(--ink-soft);
+    margin: 0;
+    max-width: 60ch;
+    text-wrap: pretty;
+  }
+
+  /* ── honest status banner ── */
+  .banner {
+    margin: 28px 0 4px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--pending);
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    font-size: 0.96rem;
+    color: var(--ink-soft);
+  }
+  .banner strong { color: var(--ink); }
+
+  /* ── status legend ── */
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+  .tag {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.02em;
+    padding: 4px 11px 4px 9px; border-radius: 100px; border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .tag .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .tag.ok { background: var(--ok-bg); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+  .tag.ok .dot { background: var(--ok); }
+  .tag.pending { background: var(--pending-bg); color: var(--pending); border-color: color-mix(in srgb, var(--pending) 30%, transparent); }
+  .tag.pending .dot { background: var(--pending); }
+
+  /* ── sections ── */
+  section { padding-top: 52px; }
+  h2 {
+    font-size: 1.5rem; letter-spacing: -0.01em; margin: 0 0 4px;
+    display: flex; align-items: baseline; gap: 12px; font-weight: 660;
+  }
+  h2 .num {
+    font-family: var(--mono); font-size: 0.8rem; color: var(--accent);
+    font-weight: 500; letter-spacing: 0.05em;
+  }
+  h3 { font-size: 1.02rem; margin: 30px 0 6px; font-weight: 640; }
+  .sub { color: var(--ink-soft); margin: 6px 0 18px; }
+  p { margin: 14px 0; }
+  ul { padding-left: 1.25em; margin: 14px 0; }
+  li { margin: 6px 0; }
+  code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--code-bg); color: var(--code-ink);
+    padding: 0.12em 0.4em; border-radius: 5px;
+    border: 1px solid var(--border);
+  }
+
+  /* ── command blocks ── */
+  .cmd {
+    position: relative;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin: 16px 0;
+    overflow: hidden;
+  }
+  .cmd-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--code-bg) 60%, var(--bg));
+  }
+  .cmd-head .label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+  .cmd pre {
+    margin: 0; padding: 14px 16px; overflow-x: auto;
+    font-family: var(--mono); font-size: 0.86rem; line-height: 1.7;
+    color: var(--code-ink);
+  }
+  .cmd pre .p { color: var(--accent); user-select: none; }   /* prompt $ */
+  .cmd pre .c { color: var(--ink-faint); }                    /* comment */
+  .copy {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em;
+    background: transparent; color: var(--ink-faint);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 3px 9px; cursor: pointer; transition: color .15s, border-color .15s;
+  }
+  .copy:hover { color: var(--accent); border-color: var(--accent); }
+  .copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ── requirement / step cards ── */
+  .grid { display: grid; gap: 12px; margin: 18px 0; }
+  @media (min-width: 620px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 18px;
+  }
+  .card h4 { margin: 0 0 4px; font-size: 0.95rem; }
+  .card p { margin: 0; color: var(--ink-soft); font-size: 0.92rem; }
+  .card .k { font-family: var(--mono); font-size: 0.8rem; color: var(--accent); }
+
+  /* ── two-plane diagram ── */
+  .planes { display: grid; gap: 12px; margin: 20px 0; }
+  .plane {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px 18px; background: var(--surface);
+  }
+  .plane.coord { border-top: 3px solid var(--accent); }
+  .plane.media { border-top: 3px solid var(--ok); }
+  .plane .ptitle {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em;
+    text-transform: uppercase; margin: 0 0 8px;
+  }
+  .plane.coord .ptitle { color: var(--accent); }
+  .plane.media .ptitle { color: var(--ok); }
+  .plane ul { margin: 0; padding-left: 1.15em; font-size: 0.9rem; color: var(--ink-soft); }
+  .plane-link {
+    text-align: center; font-family: var(--mono); font-size: 11px;
+    color: var(--ink-faint); letter-spacing: 0.05em;
+  }
+
+  /* ── module table ── */
+  .tablewrap { overflow-x: auto; margin: 18px 0; border: 1px solid var(--border); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  td code { font-size: 0.82em; }
+
+  /* ── roadmap ── */
+  ol.phases { list-style: none; padding: 0; margin: 18px 0; counter-reset: ph; }
+  ol.phases li {
+    position: relative; padding: 12px 0 12px 44px; border-bottom: 1px solid var(--border);
+  }
+  ol.phases li:last-child { border-bottom: none; }
+  ol.phases li::before {
+    counter-increment: ph; content: counter(ph);
+    position: absolute; left: 0; top: 12px;
+    width: 28px; height: 28px; border-radius: 7px;
+    background: var(--accent-bg); color: var(--accent);
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    display: grid; place-items: center;
+  }
+  ol.phases .done::before { background: var(--ok-bg); color: var(--ok); content: "✓"; }
+  ol.phases b { font-weight: 640; }
+  ol.phases span { color: var(--ink-soft); }
+
+  footer {
+    border-top: 1px solid var(--border); margin-top: 64px;
+    padding: 28px 0 40px; color: var(--ink-faint); font-size: 0.85rem;
+  }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; }
+
+  /* theme toggle */
+  .toggle {
+    position: fixed; top: 16px; right: 16px; z-index: 10;
+    font-family: var(--mono); font-size: 12px;
+    background: var(--surface); color: var(--ink-soft);
+    border: 1px solid var(--border); border-radius: 100px;
+    padding: 6px 13px; cursor: pointer;
+  }
+  .toggle:hover { color: var(--accent); border-color: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<button class="toggle" id="themeToggle" aria-label="Toggle color theme">theme</button>
+
+<header>
+  <div class="wrap">
+    <p class="eyebrow">joescreen · phase-0 foundation</p>
+    <h1>Installing &amp; running JoeScreen</h1>
+    <p class="lede">A native macOS + iOS shared-desktop app in the spirit of CoScreen — multiple people share individual app windows, each landing on every peer's desktop as a real, movable, live-video window.</p>
+
+    <div class="banner">
+      <strong>Read this first.</strong> JoeScreen is at its <strong>foundation stage</strong>. What runs today is the <strong>test suite</strong> and the <strong>media server</strong> — not the apps. There is no clickable JoeScreen app yet: on-device capture, input injection, and the iOS extension are scaffolded behind seams and are <strong>pending hardware</strong>. This page tells you exactly what you can run now and what's still ahead.
+    </div>
+
+    <div class="legend" aria-label="status legend">
+      <span class="tag ok"><span class="dot"></span>Runs today</span>
+      <span class="tag pending"><span class="dot"></span>Pending hardware</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section id="requirements">
+    <h2><span class="num">01</span> Requirements</h2>
+    <p class="sub">The foundation builds and tests with just a Swift toolchain. The server needs Docker.</p>
+    <div class="grid two">
+      <div class="card">
+        <h4>Xcode <span class="k">26.1+</span></h4>
+        <p>Ships the Swift 6.2 toolchain and the macOS&nbsp;26 / iOS&nbsp;26 SDKs. This is the build floor.</p>
+      </div>
+      <div class="card">
+        <h4>Deployment target <span class="k">macOS 14 · iOS 17</span></h4>
+        <p>The app floor (built with the 26.1 SDK). Newer OS features are availability-gated in code.</p>
+      </div>
+      <div class="card">
+        <h4>Docker <span class="k">for the server</span></h4>
+        <p>Runs the self-hosted LiveKit media server. Optional for building &amp; testing; required for live media.</p>
+      </div>
+      <div class="card">
+        <h4>Git + a terminal</h4>
+        <p>Everything below is command-line. No account or signing needed just to build and test.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="get">
+    <h2><span class="num">02</span> Get the code</h2>
+    <div class="cmd">
+      <div class="cmd-head"><span class="label">shell</span><button class="copy" data-copy="git clone https://github.com/jmaathur/joescreen.git
+cd joescreen">Copy</button></div>
+      <pre><span class="p">$</span> git clone https://github.com/jmaathur/joescreen.git
+<span class="p">$</span> cd joescreen</pre>
+    </div>
+  </section>
+
+  <section id="build">
+    <h2><span class="num">03</span> Build &amp; test <span class="tag ok" style="font-size:11px;margin-left:4px"><span class="dot"></span>runs today</span></h2>
+    <p class="sub">This is the real, verifiable gate: the shared logic package builds and passes its full test suite on any Mac — no hardware, no network, no server.</p>
+    <div class="cmd">
+      <div class="cmd-head"><span class="label">the machine gate</span><button class="copy" data-copy="swift build
+swift test">Copy</button></div>
+      <pre><span class="p">$</span> swift build     <span class="c"># 5 library targets, Swift 6 + strict concurrency</span>
+<span class="p">$</span> swift test      <span class="c"># 84 tests across the non-networked seams</span></pre>
+    </div>
+    <p>Expected result:</p>
+    <div class="cmd">
+      <div class="cmd-head"><span class="label">expected output</span></div>
+      <pre>Build complete!
+Test Suite 'All tests' passed
+     Executed 84 tests, with 0 failures</pre>
+    </div>
+    <p>Those 84 tests cover the load-bearing logic that has to be correct before any UI exists: the wire protocol and its channel matrix, per-sender input ordering &amp; loss detection, coordinate mapping with the security clamp, owner-side input authorization (every deny path), bandwidth admission math, the codec-fallback state machine, clipboard diffing, terminal secret redaction, ICE batching, and signaling back-pressure. See <code>TESTING.md</code> for the full map.</p>
+  </section>
+
+  <section id="server">
+    <h2><span class="num">04</span> Run the media server <span class="tag ok" style="font-size:11px;margin-left:4px"><span class="dot"></span>runs today</span></h2>
+    <p class="sub">All real-time media (screen video, cursors, input, clipboard, terminal) travels over a self-hosted LiveKit SFU — never over SharePlay. For local testing you don't even need TLS certs.</p>
+
+    <h3>Loopback (fastest — no certs, no domain)</h3>
+    <div class="cmd">
+      <div class="cmd-head"><span class="label">local dev</span><button class="copy" data-copy="livekit-server --dev">Copy</button></div>
+      <pre><span class="p">$</span> livekit-server --dev   <span class="c"># in-memory keys, ws://localhost:7880</span></pre>
+    </div>
+
+    <h3>Full server (Docker)</h3>
+    <div class="cmd">
+      <div class="cmd-head"><span class="label">infra/</span><button class="copy" data-copy="cd infra
+docker compose up">Copy</button></div>
+      <pre><span class="p">$</span> cd infra
+<span class="p">$</span> docker compose up   <span class="c"># pinned livekit-server v1.13.3 + JWT token endpoint</span></pre>
+    </div>
+    <p>See <code>infra/README.md</code> for supplying a domain, TLS certs, and real API keys. Two things to know: the API secret lives <em>only</em> in the token server (never in the app binaries), and media is plaintext in the server's memory until end-to-end encryption lands in a later version — run it on infrastructure you control.</p>
+  </section>
+
+  <section id="apps">
+    <h2><span class="num">05</span> The apps <span class="tag pending" style="font-size:11px;margin-left:4px"><span class="dot"></span>pending hardware</span></h2>
+    <p class="sub">Here's the honest part. The macOS and iOS apps are scaffolded but not yet buildable as products, and several pieces fundamentally can't be verified without paired devices.</p>
+    <p>Once the Xcode project layer is added, the apps will build and run via:</p>
+    <div class="cmd">
+      <div class="cmd-head"><span class="label">planned — not yet present</span></div>
+      <pre><span class="p">$</span> xcodebuild -scheme JoeScreen-macOS -destination 'platform=macOS' build
+<span class="p">$</span> xcodebuild -scheme JoeScreen-iOS   -destination 'generic/platform=iOS' build</pre>
+    </div>
+    <p>Why you can't just run them yet:</p>
+    <ul>
+      <li><b>Input injection forces a special build.</b> Synthesizing mouse/keyboard on the target Mac needs the Accessibility (<code>PostEvent</code>) permission, which sandboxed apps can't hold — so the Mac app must ship as a <b>notarized Developer-ID</b> app outside the App Store. That needs your signing certificate.</li>
+      <li><b>SharePlay can't be tested in one place.</b> A real session needs <b>two Macs plus an iPad on different iCloud accounts</b> — it cannot run in a single simulator.</li>
+      <li><b>iOS can share and control, but can't be controlled.</b> There's no public API to inject input into other apps on iOS. That asymmetry is permanent and built into the design.</li>
+    </ul>
+    <p>Every one of these, plus the full F1–F14 feature acceptance and the ≤150&nbsp;ms latency target, is written up as a <b>pending human run-book</b> in <code>TESTING.md</code>. Nothing there is marked done until it's actually observed on hardware.</p>
+  </section>
+
+  <section id="architecture">
+    <h2><span class="num">06</span> How it fits together</h2>
+    <p class="sub">One idea dictates the whole design: SharePlay can't stream media. So there are two planes.</p>
+    <div class="planes">
+      <div class="plane coord">
+        <p class="ptitle">Coordination plane — SharePlay</p>
+        <ul>
+          <li>Start the session (also gives free FaceTime voice)</li>
+          <li>Presence &amp; roster (opaque participant IDs)</li>
+          <li>Low-rate signaling: hand the media transport its connection info</li>
+        </ul>
+      </div>
+      <div class="plane-link">▼ bootstrap { server URL, room, token } ▼</div>
+      <div class="plane media">
+        <p class="ptitle">Media plane — self-hosted LiveKit SFU</p>
+        <ul>
+          <li>Per-window video tracks (VP9 for text legibility, H.264 fallback)</li>
+          <li>Typed data channels: cursor · input · clipboard · terminal · draw</li>
+          <li>Every client dials out → NAT traversal solved by construction</li>
+        </ul>
+      </div>
+    </div>
+    <p>The channel semantics are deliberately opposite per payload — cursor moves are unreliable/latest-wins, keystrokes are reliable/strictly-ordered — and that's enforced at the type level so a keystroke <em>cannot</em> be put on the lossy channel. Full detail in <code>docs/architecture.md</code>.</p>
+
+    <h3>What's in the box</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Module</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td><code>JoeScreenKit</code></td><td>Shared brain: wire protocol, transport seam, codec selection, input authorization, clipboard, terminal redaction, admission control. Pure, tested.</td></tr>
+          <tr><td><code>JoeScreenBridge</code></td><td>App-Group IPC between the iOS host app and its broadcast extension. Dependency-free.</td></tr>
+          <tr><td><code>JoeScreenCaptureMac</code></td><td>macOS window capture; minimize-is-unshare; pause vs. disconnect classification.</td></tr>
+          <tr><td><code>JoeScreenInputMac</code></td><td>macOS input injection + correct-permission preflight (Developer-ID, non-sandboxed).</td></tr>
+          <tr><td><code>JoeScreenUI</code></td><td>Shared SwiftUI feature layer.</td></tr>
+          <tr><td><code>infra/</code></td><td>Self-hosted LiveKit server: docker-compose, config, JWT token server.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="roadmap">
+    <h2><span class="num">07</span> Where this is on the road</h2>
+    <ol class="phases">
+      <li class="done"><b>Phase 0 — Foundation.</b> <span>API verification, green build + 84 tests, architecture &amp; decision docs, pinned deps, server infra. <em>You are here.</em></span></li>
+      <li><b>Phase 1 — Vertical slice.</b> <span>One Mac shares a window; another sees it as a native window over the real transport.</span></li>
+      <li><b>Phase 2 — Multi-share, cursors, relay.</b> <span>Simultaneous window sharing, multi-cursor presence, iPad viewer.</span></li>
+      <li><b>Phase 3 — Remote control, clipboard, security.</b> <span>Cross-machine input with owner-side authorization; byte-intact code paste.</span></li>
+      <li><b>Phase 4 — Draw &amp; shared terminal.</b> <span>Ink annotations; a PTY streamed as text (far lower latency than video).</span></li>
+      <li><b>Phase 5 — iOS sharing &amp; polish.</b> <span>Broadcast extension, fallback voice, rooms &amp; invites.</span></li>
+      <li><b>Phase 6 — Hardening at scale.</b> <span>Reconnection, the 3–10 person session at the bound, full hardware test pass.</span></li>
+    </ol>
+  </section>
+
+  <section id="reading">
+    <h2><span class="num">08</span> Keep reading</h2>
+    <ul>
+      <li><a href="../README.md"><code>README.md</code></a> — build/run/test commands and repo layout</li>
+      <li><a href="../DECISIONS.md"><code>DECISIONS.md</code></a> — every architectural choice and why (D1–D14)</li>
+      <li><a href="../RISKS.md"><code>RISKS.md</code></a> — the risk register, including everything unverified (R1–R30)</li>
+      <li><a href="../TESTING.md"><code>TESTING.md</code></a> — what's green today and the pending hardware run-book</li>
+      <li><a href="architecture.md"><code>docs/architecture.md</code></a> — the two-plane design in full</li>
+    </ul>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>JoeScreen · Phase-0 foundation</span>
+    <span>·</span>
+    <span>macOS + iOS/iPadOS</span>
+    <span>·</span>
+    <span>Not affiliated with CoScreen / Datadog</span>
+  </div>
+</footer>
+
+<script>
+  // Theme toggle: stamp data-theme so it overrides the media query both ways.
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById('themeToggle');
+    function current() {
+      var attr = root.getAttribute('data-theme');
+      if (attr) return attr;
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    btn.addEventListener('click', function () {
+      var next = current() === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      btn.textContent = next === 'dark' ? 'light mode' : 'dark mode';
+    });
+  })();
+
+  // Copy buttons.
+  document.querySelectorAll('.copy').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var text = b.getAttribute('data-copy') || '';
+      navigator.clipboard && navigator.clipboard.writeText(text).then(function () {
+        var old = b.textContent; b.textContent = 'Copied';
+        setTimeout(function () { b.textContent = old; }, 1400);
+      });
+    });
+  });
+</script>
+</body>
+</html>

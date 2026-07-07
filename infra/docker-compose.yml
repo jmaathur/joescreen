@@ -1,0 +1,78 @@
+# JoeScreen media-plane infrastructure
+# =====================================
+# Self-hosted single-node LiveKit SFU (Apache-2.0) + a tiny token server.
+# All clients (Mac/iOS) dial OUT to this box; nothing dials into the clients.
+#
+# HUMAN OPS REQUIRED BEFORE THIS WORKS IN PRODUCTION (see RISKS.md R2/R3):
+#   R2: You must own a domain (e.g. sfu.example.com), point DNS at this host,
+#       and place valid TLS certs in ./certs/ (fullchain.pem + privkey.pem).
+#       The embedded TURN/TLS listener on :443 will not start without them.
+#   R3: You must generate a real API key/secret pair and put it in ./.env
+#       (and mirror it in livekit.yaml). NEVER embed the secret in the app —
+#       only the token-server holds it. Generate with:
+#         docker run --rm livekit/livekit-server:v1.13.3 generate-keys
+#
+# Example ./.env (git-ignore it):
+#   LIVEKIT_API_KEY=APIxxxxxxxxxxxx
+#   LIVEKIT_API_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#   LIVEKIT_URL=wss://sfu.example.com
+
+services:
+  # ---------------------------------------------------------------------------
+  # LiveKit SFU — pinned to v1.13.3 (do not use :latest; media-plane behavior
+  # and config schema must stay stable for the pinned client SDKs).
+  # ---------------------------------------------------------------------------
+  livekit:
+    image: livekit/livekit-server:v1.13.3
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    ports:
+      # 7880/tcp — HTTP + WebSocket signaling (room join, negotiation).
+      # In production, front this with the same TLS domain (wss://) or let
+      # your reverse proxy / load balancer terminate TLS for it.
+      - "7880:7880"
+      # 7881/tcp — ICE/TCP fallback for media when UDP is blocked by firewalls.
+      - "7881:7881"
+      # 50000-50100/udp — RTP/RTCP media port range. MUST match
+      # rtc.port_range_start/end in livekit.yaml. Widen for more participants
+      # (rule of thumb: a handful of ports per participant is plenty for a
+      # single-node deployment of this size).
+      - "50000-50100:50000-50100/udp"
+      # 443/tcp — embedded TURN over TLS. Looks like ordinary HTTPS traffic,
+      # so it traverses strict corporate firewalls. Requires the certs and
+      # domain from R2 above (turn.tls_port + turn.domain in livekit.yaml).
+      - "443:443"
+    volumes:
+      # Server config (ports, keys, TURN, room policy). See infra/livekit.yaml.
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+      # TLS certs for the embedded TURN listener (R2). Put fullchain.pem and
+      # privkey.pem here; paths are referenced from livekit.yaml.
+      - ./certs:/etc/livekit-certs:ro
+    environment:
+      # LIVEKIT_KEYS overrides the `keys:` map in livekit.yaml when set.
+      # Format is "key: secret" (note the space after the colon).
+      # Values come from ./.env — never commit real secrets (R3).
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY in .env (RISKS.md R3)}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env (RISKS.md R3)}"
+
+  # ---------------------------------------------------------------------------
+  # Token server — mints short-lived, room-scoped JWTs for clients.
+  # This is the ONLY place the LiveKit API secret exists at runtime; the
+  # Mac/iOS apps fetch tokens from here and never see the secret (R3).
+  # Build context expects a trivial Dockerfile in ./token-server (a 5-line
+  # golang builder image — see infra/README.md for the snippet).
+  # ---------------------------------------------------------------------------
+  token-server:
+    build: ./token-server
+    restart: unless-stopped
+    ports:
+      # 8080/tcp — GET /token?room=<r>&identity=<participant-uuid>
+      # In production, put this behind HTTPS (same reverse proxy as signaling)
+      # and add authentication appropriate to your deployment.
+      - "8080:8080"
+    environment:
+      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY in .env (RISKS.md R3)}"
+      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env (RISKS.md R3)}"
+      # The URL handed back to clients so they know where to dial the SFU.
+      LIVEKIT_URL: "${LIVEKIT_URL:-wss://sfu.example.com}"
+    depends_on:
+      - livekit

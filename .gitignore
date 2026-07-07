@@ -1,0 +1,14 @@
+.DS_Store
+build/
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+.env
+TEAM_ID.local
+
+# harness internal
+.claude/

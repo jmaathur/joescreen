@@ -1,0 +1,52 @@
+# LiveKit server configuration for JoeScreen (livekit-server v1.13.3).
+# Schema reference: https://docs.livekit.io/home/self-hosting/deployment/
+#
+# !! REPLACE THE PLACEHOLDER KEY/SECRET AND DOMAIN BEFORE DEPLOYING !!
+# Generate a real pair with:
+#   docker run --rm livekit/livekit-server:v1.13.3 generate-keys
+# The same key/secret must be given to the token-server via .env (RISKS.md R3).
+# Note: the LIVEKIT_KEYS env var set in docker-compose.yml overrides the
+# `keys:` map below when present — keep the two in sync.
+
+# HTTP/WebSocket signaling port (matches the 7880 mapping in docker-compose.yml).
+port: 7880
+
+rtc:
+  # UDP media port range — MUST match the UDP range published in
+  # docker-compose.yml (50000-50100).
+  port_range_start: 50000
+  port_range_end: 50100
+  # ICE/TCP fallback when client UDP is blocked.
+  tcp_port: 7881
+  # Discover this node's public IP via STUN and advertise it in ICE
+  # candidates. Required when running behind Docker/NAT on a cloud VM,
+  # otherwise clients receive unreachable container-internal addresses.
+  use_external_ip: true
+
+# API key/secret pairs used to validate access-token JWTs minted by the
+# token-server. PLACEHOLDERS — replace with generated values (see header).
+keys:
+  APIJoeScreenKey: REPLACE_WITH_GENERATED_SECRET
+
+room:
+  # Auto-create rooms on first join, so the token-server is the only
+  # control-plane piece needed: a valid room-scoped token is sufficient.
+  auto_create: true
+  # Tear down empty rooms after 5 minutes to reclaim resources.
+  empty_timeout: 300
+
+turn:
+  # Embedded TURN server so clients behind strict NATs/firewalls can relay
+  # media over what looks like ordinary HTTPS (TCP 443).
+  enabled: true
+  # PLACEHOLDER — the DNS name pointing at this host, with a valid TLS cert
+  # for it (RISKS.md R2). Clients are handed this domain for TURN.
+  domain: sfu.example.com
+  # TURN over TLS on 443 (matches the 443 mapping in docker-compose.yml).
+  tls_port: 443
+  # Cert paths inside the container — docker-compose.yml mounts ./certs here.
+  cert_file: /etc/livekit-certs/fullchain.pem
+  key_file: /etc/livekit-certs/privkey.pem
+
+logging:
+  level: info
