@@ -10,8 +10,12 @@ import JoeScreenKit
 /// Every callback hops onto the actor via an unstructured `Task`; the actor serializes them.
 final class LiveKitRoomObserver: NSObject, RoomDelegate, Sendable {
     /// Weak back-reference to avoid a retain cycle (the transport holds the observer AND the room,
-    /// which holds the observer as a delegate).
-    private weak var transport: LiveKitTransport?
+    /// which holds the observer as a delegate). `nonisolated(unsafe)` because a `weak` reference is
+    /// inherently mutable storage (Swift can't express `weak let`), yet this property is written
+    /// exactly ONCE in `init` and only ever read afterward — never reassigned. The `@objc` delegate
+    /// callbacks read it from LiveKit's callback threads; a weak read is atomic, and each callback
+    /// immediately hops onto the actor, so there is no shared mutable state to race.
+    private nonisolated(unsafe) weak var transport: LiveKitTransport?
 
     init(transport: LiveKitTransport) {
         self.transport = transport
