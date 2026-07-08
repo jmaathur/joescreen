@@ -69,7 +69,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app
         PRODUCT_NAME: JoeScreen
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "2"
+        CURRENT_PROJECT_VERSION: "3"
         # Empty entitlements by default (Killed-9 avoidance). Swap to the -team file for a real team.
         CODE_SIGN_ENTITLEMENTS: macOS/Resources/JoeScreen-macOS-empty.entitlements
         # Non-sandboxed Developer-ID distribution (D6): App Sandbox deliberately absent.
@@ -80,7 +80,7 @@ targets:
         CFBundleName: JoeScreen
         CFBundleDisplayName: JoeScreen
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "2"
+        CFBundleVersion: "3"
         LSMinimumSystemVersion: "14.0"
         # App Store category (required for App Store Connect / TestFlight submission).
         LSApplicationCategoryType: "public.app-category.productivity"
@@ -126,10 +126,13 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app.ios
         PRODUCT_NAME: JoeScreen
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "2"
+        CURRENT_PROJECT_VERSION: "3"
         TARGETED_DEVICE_FAMILY: "1,2"   # iPhone + iPad
-        # Entitlements: SharePlay group-session + App Group (backs NSSupportsGroupActivities).
-        CODE_SIGN_ENTITLEMENTS: iOS/Resources/JoeScreen-iOS.entitlements
+        # Entitlements file. SHIP_IOS_ENTITLEMENTS is exported by the ship scripts (build-ipa.sh) to
+        # select minimal (default, no restricted entitlements → auto-signing works before SharePlay
+        # approval) vs full (after approval). For plain `bun run dev` the var is unset, so this must
+        # fall back to a real file — xcodegen has no default syntax, so dev.sh/app.sh export it too.
+        CODE_SIGN_ENTITLEMENTS: ${SHIP_IOS_ENTITLEMENTS}
         # Signing is ALLOWED so a Release/TestFlight archive can be code-signed. The ship scripts
         # (scripts/build-ipa.sh) pass CODE_SIGN_STYLE=Automatic + DEVELOPMENT_TEAM on the archive
         # command; local Debug builds still run unsigned/ad-hoc (CODE_SIGNING_REQUIRED stays NO here).
@@ -142,7 +145,7 @@ targets:
         CFBundleName: JoeScreen
         CFBundleDisplayName: JoeScreen
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "2"
+        CFBundleVersion: "3"
         # App Store category + export-compliance (same rationale as macOS above).
         LSApplicationCategoryType: "public.app-category.productivity"
         ITSAppUsesNonExemptEncryption: false

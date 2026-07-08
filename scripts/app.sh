@@ -11,6 +11,10 @@ cd "$(dirname "$0")/../apps/joescreen"
 ROOM="${1:-demo}"
 JOIN_URL="${JOIN_URL:-ws://localhost:7880}"
 
+# project.yml references ${SHIP_IOS_ENTITLEMENTS} for the iOS target; default it so xcodegen doesn't
+# emit an empty path (this script only builds macOS, but xcodegen generates all targets).
+export SHIP_IOS_ENTITLEMENTS="${SHIP_IOS_ENTITLEMENTS:-iOS/Resources/JoeScreen-iOS-minimal.entitlements}"
+
 echo "▶ regenerating Xcode project"
 xcodegen generate --spec Apps/project.yml >/dev/null
 
