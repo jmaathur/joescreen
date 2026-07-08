@@ -28,7 +28,12 @@ echo "── build + export"
 bash "$ROOT/scripts/build-ipa.sh" "$PLATFORM"
 
 echo "── upload"
-bash "$ROOT/scripts/testflight-submit.sh" "$PLATFORM"
+if ! bash "$ROOT/scripts/testflight-submit.sh" "$PLATFORM"; then
+	echo "" >&2
+	echo "✖ upload FAILED — build $NEW_BUILD did NOT ship. See the validation errors above." >&2
+	echo "  (Nothing to commit; fix the reported issue and re-run.)" >&2
+	exit 1
+fi
 
 echo ""
 echo "✓ TestFlight build $NEW_BUILD shipped for $PLATFORM."

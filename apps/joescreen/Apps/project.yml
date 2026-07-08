@@ -69,7 +69,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app
         PRODUCT_NAME: JoeScreen
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "3"
+        CURRENT_PROJECT_VERSION: "5"
         # Empty entitlements by default (Killed-9 avoidance). Swap to the -team file for a real team.
         CODE_SIGN_ENTITLEMENTS: macOS/Resources/JoeScreen-macOS-empty.entitlements
         # Non-sandboxed Developer-ID distribution (D6): App Sandbox deliberately absent.
@@ -80,7 +80,7 @@ targets:
         CFBundleName: JoeScreen
         CFBundleDisplayName: JoeScreen
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "3"
+        CFBundleVersion: "5"
         LSMinimumSystemVersion: "14.0"
         # App Store category (required for App Store Connect / TestFlight submission).
         LSApplicationCategoryType: "public.app-category.productivity"
@@ -114,6 +114,8 @@ targets:
     sources:
       - path: iOS/Sources
       - path: Shared/Sources
+      # App icon asset catalog (App Store requires a 1024 icon + CFBundleIconName).
+      - path: iOS/Resources/Assets.xcassets
     dependencies:
       - package: JoeScreen
         product: JoeScreenKit
@@ -126,8 +128,10 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app.ios
         PRODUCT_NAME: JoeScreen
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "3"
+        CURRENT_PROJECT_VERSION: "5"
         TARGETED_DEVICE_FAMILY: "1,2"   # iPhone + iPad
+        # App icon from the asset catalog → emits CFBundleIconName (App Store validation requires it).
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Entitlements file. SHIP_IOS_ENTITLEMENTS is exported by the ship scripts (build-ipa.sh) to
         # select minimal (default, no restricted entitlements → auto-signing works before SharePlay
         # approval) vs full (after approval). For plain `bun run dev` the var is unset, so this must
@@ -145,13 +149,18 @@ targets:
         CFBundleName: JoeScreen
         CFBundleDisplayName: JoeScreen
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "3"
+        CFBundleVersion: "5"
         # App Store category + export-compliance (same rationale as macOS above).
         LSApplicationCategoryType: "public.app-category.productivity"
         ITSAppUsesNonExemptEncryption: false
+        # Name of the app-icon set in Assets.xcassets. Apple validation requires this key explicitly
+        # (actool doesn't always merge it into the plist), so declare it here to be certain.
+        CFBundleIconName: AppIcon
         UILaunchScreen: {}
+        # iPad multitasking requires ALL FOUR orientations (Apple validation rejects a partial set).
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSMicrophoneUsageDescription: "JoeScreen uses your microphone for live voice during a shared session."
