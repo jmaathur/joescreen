@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  App Store (TestFlight) export options for JoeScreen-iOS.
+  __TEAM_ID__ is substituted at build time by scripts/build-ipa.sh from APPLE_TEAM_ID.
+  method=app-store-connect uploads via the App Store pipeline; signingStyle=automatic
+  lets Xcode resolve the distribution cert + App Store provisioning profile (needs an
+  approved SharePlay group-session capability on the App ID — see docs/SHIPPING_TESTFLIGHT.md).
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>teamID</key>
+	<string>__TEAM_ID__</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>

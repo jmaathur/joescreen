@@ -11,7 +11,10 @@
 		"app": "bash scripts/app.sh",
 		"build": "turbo run build",
 		"test": "turbo run test",
-		"clean": "turbo run clean"
+		"clean": "turbo run clean",
+		"build:ipa": "bash scripts/build-ipa.sh",
+		"testflight": "bash scripts/testflight.sh",
+		"testflight:submit": "bash scripts/testflight-submit.sh"
 	},
 	"workspaces": [
 		"apps/*"

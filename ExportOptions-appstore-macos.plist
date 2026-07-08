@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  App Store (TestFlight) export options for JoeScreen-macOS.
+  __TEAM_ID__ is substituted at build time by scripts/build-ipa.sh from APPLE_TEAM_ID.
+  The macOS app is NON-sandboxed by design (D6) — that is fine for TestFlight (App Sandbox
+  is a Mac App Store *release* requirement, not a TestFlight one). The restricted
+  com.apple.developer.group-session entitlement in the -team entitlements file is what makes
+  the App Store provisioning profile embed. Produces a signed .pkg for upload.
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>teamID</key>
+	<string>__TEAM_ID__</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>

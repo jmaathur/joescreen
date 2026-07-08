@@ -29,6 +29,9 @@ xcuserdata/
 # ── env / secrets ───────────────────────────────────────────────────────
 .env
 TEAM_ID.local
+# TestFlight/ASC credentials — the .example template IS committed, the real file is not.
+.env.testflight
+*.p8
 
 # harness internal
 .claude/
