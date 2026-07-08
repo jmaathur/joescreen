@@ -164,6 +164,9 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSMicrophoneUsageDescription: "JoeScreen uses your microphone for live voice during a shared session."
+        # Required even though the iOS viewer never opens the camera: the LiveKit SDK references camera
+        # APIs, so Apple's static analysis (ITMS-90683) mandates a purpose string or it rejects the build.
+        NSCameraUsageDescription: "JoeScreen may use your camera for optional video during a shared session."
         NSSupportsGroupActivities: true
         CFBundleURLTypes:
           - CFBundleURLName: com.joescreen.app.join
