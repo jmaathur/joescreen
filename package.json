@@ -14,7 +14,9 @@
 		"clean": "turbo run clean",
 		"build:ipa": "bash scripts/build-ipa.sh",
 		"testflight": "bash scripts/testflight.sh",
-		"testflight:submit": "bash scripts/testflight-submit.sh"
+		"testflight:submit": "bash scripts/testflight-submit.sh",
+		"ship:setup": "bash scripts/testflight-setup.sh",
+		"asc:provision": "bash -c 'set -a; . ./.env.testflight; set +a; bun scripts/asc-provision.mjs \"$@\"' --"
 	},
 	"workspaces": [
 		"apps/*"

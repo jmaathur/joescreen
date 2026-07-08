@@ -50,6 +50,19 @@ RENDERED_OPTS="$BUILD_DIR/ExportOptions-$PLATFORM.plist"
 /usr/bin/sed "s/__TEAM_ID__/$APPLE_TEAM_ID/g" "$EXPORT_OPTS" > "$RENDERED_OPTS"
 EXPORT_OPTS="$RENDERED_OPTS"
 
+# iOS entitlements selection. Default = minimal (no SharePlay / App Group), so automatic signing
+# succeeds BEFORE the group-session managed capability is approved — the first viewer+voice build
+# ships now. After SharePlay is approved for the App ID, pass SHIP_ENTITLEMENTS=full to re-enable it.
+ENTITLEMENTS_OVERRIDE=()
+if [ "$PLATFORM" = "ios" ]; then
+	case "${SHIP_ENTITLEMENTS:-minimal}" in
+		full)    IOS_ENT="iOS/Resources/JoeScreen-iOS.entitlements"; echo "── iOS entitlements: FULL (SharePlay + App Group — needs group-session approved)";;
+		minimal) IOS_ENT="iOS/Resources/JoeScreen-iOS-minimal.entitlements"; echo "── iOS entitlements: MINIMAL (viewer+voice; no SharePlay yet)";;
+		*) echo "✖ SHIP_ENTITLEMENTS must be 'minimal' or 'full'" >&2; exit 1;;
+	esac
+	ENTITLEMENTS_OVERRIDE=(CODE_SIGN_ENTITLEMENTS="$IOS_ENT")
+fi
+
 echo "── regenerating Xcode project (TEAM_ID=$APPLE_TEAM_ID)"
 ( cd "$APP_DIR" && TEAM_ID="$APPLE_TEAM_ID" xcodegen generate --spec Apps/project.yml >/dev/null )
 
@@ -57,8 +70,14 @@ echo "── archiving $SCHEME (Release, App Store distribution signing)"
 run_logged "$LOG_DIR/archive-$PLATFORM.log" \
 	xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
 		"${SDK_ARGS[@]}" -archivePath "$ARCHIVE" \
+		-allowProvisioningUpdates \
+		-authenticationKeyID "$ASC_API_KEY_ID" \
+		-authenticationKeyIssuerID "$ASC_API_ISSUER_ID" \
+		-authenticationKeyPath "$ASC_API_KEY_PATH" \
 		DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
 		CODE_SIGN_STYLE=Automatic CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES \
+		"CODE_SIGN_IDENTITY=Apple Distribution" \
+		"${ENTITLEMENTS_OVERRIDE[@]}" \
 		archive
 
 echo "── exporting App Store package"

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MINIMAL iOS entitlements for the FIRST TestFlight build (viewer + voice only).
+  Deliberately contains NO restricted/managed entitlements so automatic signing succeeds BEFORE the
+  SharePlay (group-session) managed capability is approved and BEFORE the App Group is registered —
+  both of which would otherwise fail auto-signing ("can't add … entitlements to your profile").
+
+  Neither SharePlay nor the App Group is used by the iOS viewer+voice build, so nothing is lost.
+  Once group-session is APPROVED for the App ID (and the App Group registered if you build the
+  broadcast extension), switch back to JoeScreen-iOS.entitlements via SHIP_ENTITLEMENTS=full.
+
+  An empty dict is a valid entitlements file; automatic signing still embeds application-identifier
+  and team-identifier (the restricted entitlement TestFlight needs) from the App Store profile.
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
