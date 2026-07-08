@@ -57,6 +57,11 @@ public final class AppModel {
     /// The local webcam track for the self-preview tile; non-nil exactly while the camera is on.
     public private(set) var localCameraTrack: VideoTrack?
 
+    /// The live connected-participant set as reported by the transport (local + all remotes). The
+    /// authoritative membership source; the displayed `participants` roster is recomputed from this
+    /// unioned with current share owners. Kept separate so disconnects actually remove people.
+    private var transportParticipants: Set<ParticipantID> = []
+
     /// Windows this instance is locally sharing (capture services), keyed by windowID.
     private var localCaptures: [WindowID: WindowCaptureService] = [:]
 
@@ -119,6 +124,13 @@ public final class AppModel {
             Task { @MainActor in self?.addRemoteWindow(windowID: windowID, track: track) }
         }
 
+        // Install the participant-roster hook BEFORE connecting so early joiners aren't missed. This
+        // is what makes EVERYONE connected appear in the roster — not just those who've shared a
+        // window (the old snapshot-only derivation left non-sharing peers, and often yourself, absent).
+        await transport.setOnParticipantsChanged { [weak self] ids in
+            Task { @MainActor in self?.applyParticipantSet(ids) }
+        }
+
         // Bridge connection state + participants.
         startConnectionPump()
         startParticipantPump()
@@ -133,10 +145,7 @@ public final class AppModel {
             startStatePump(state)
             // Enable the mic on join (M5).
             try? await transport.setMicrophone(enabled: true)
-            micEnabled = await transport.isAudioPublished()
-            // Populate the input-device pickers for the control bar (mic + webcam). Camera devices
-            // may be empty until camera TCC is granted; refreshInputDevices() re-fetches after that.
-            await refreshInputDevices()
+            micEnabled = await transport.isMicrophoneEnabled()
             // Start the cursor pump (M6).
             let cursor = try await transport.openDataChannel(.cursor)
             let pump = CursorPump(channel: cursor, localID: localParticipantID)
@@ -146,6 +155,11 @@ public final class AppModel {
             phase = .inCall
             // Seed the local participant into the roster immediately.
             if let me = localParticipantID { participants.insert(me) }
+            // Pre-fill the input-device pickers OFF the join path: `CameraCapturer.captureDevices()`
+            // can block / trigger the camera-TCC prompt, so it must never sit inline in connect (it
+            // would stall the whole session — incl. remote-track rendering). The menus also refresh
+            // on open, so an empty list here is harmless.
+            Task { [weak self] in await self?.refreshInputDevices() }
             // Automation: auto-share a window if --share-window-id was passed.
             if let cgWindowID = autoShareWindowID {
                 autoShareWindowID = nil
@@ -181,6 +195,7 @@ public final class AppModel {
         selectedVideoInputID = nil
         phase = .idle
         participants = []
+        transportParticipants = []
         room = RoomModel()
         localParticipantID = nil
         mediaState = .disconnected
@@ -202,9 +217,29 @@ public final class AppModel {
     }
 
     private func startParticipantPump() {
-        // LiveKit exposes participant connect/disconnect via the transport's identity map; we derive
-        // the roster from remote-window owners + local + any explicitly seen. For M4 the roster is
-        // driven by state snapshots (owners) + local; a fuller participant stream is an M7 concern.
+        // Roster is now driven by the transport's participant-changed hook (installed in `connect`),
+        // which reports the full connected set (local + all remotes) on every connect/disconnect and
+        // on (re)connect. `applyParticipantSet` merges it in. Share-owner derivation still runs too
+        // (a joiner learns owners from state snapshots), so the two are unioned — never fight.
+    }
+
+    /// Record the authoritative connected-participant set from the transport and recompute the roster.
+    /// This is the LIVE membership source (local + all connected remotes), so disconnects actually
+    /// remove people — unlike the additive snapshot path.
+    private func applyParticipantSet(_ ids: Set<ParticipantID>) {
+        transportParticipants = ids
+        recomputeRoster()
+    }
+
+    /// The displayed roster = live transport members ∪ current share owners ∪ me. Share owners are
+    /// unioned in because a joiner can learn an owner from a state snapshot slightly before (or
+    /// without) a bound media-plane identity; they drop off when their share vanishes + they're not a
+    /// live transport member.
+    private func recomputeRoster() {
+        var roster = transportParticipants
+        roster.formUnion(room.shares.values)
+        if let me = localParticipantID { roster.insert(me) }
+        participants = roster
     }
 
     private func startStatePump(_ channel: any WireDataChannel) {
@@ -250,10 +285,8 @@ public final class AppModel {
     /// JOINER applies foreign snapshots; the local sharer's own windows are driven by its capture.
     private func applyRoom(_ newRoom: RoomModel) {
         room = newRoom
-        // Roster: everyone who owns a share, plus us.
-        var roster = Set(newRoom.shares.values)
-        if let me = localParticipantID { roster.insert(me) }
-        participants.formUnion(roster)
+        // Recompute the roster (live transport members ∪ this snapshot's share owners ∪ me).
+        recomputeRoster()
         // Close any remote viewer window whose share disappeared.
         for windowID in remoteWindows.keys where newRoom.owner(of: windowID) == nil {
             removeRemoteWindowIfForeign(windowID)
@@ -267,8 +300,10 @@ public final class AppModel {
         let owner = room.owner(of: windowID) ?? windowID // fallback owner id for coloring
         let win = RemoteVideoWindow(windowID: windowID, ownerID: owner, track: track)
         remoteWindows[windowID] = win
-        if let me = localParticipantID { participants.insert(me) }
-        participants.insert(owner)
+        // The track owner is definitely present; ensure they're in the roster even if the
+        // participant-changed hook and this subscription race.
+        transportParticipants.insert(owner)
+        recomputeRoster()
         windowManager.open(win)
     }
 
@@ -289,23 +324,43 @@ public final class AppModel {
 
     // MARK: - Local media controls (mic + webcam)
 
-    /// Re-fetch the audio + video input device lists. Called on join and whenever a picker opens so
-    /// hot-plugged devices (and cameras newly visible after a TCC grant) show up.
-    public func refreshInputDevices() async {
+    /// Re-fetch the AUDIO input list. Safe to call anytime — audio-device enumeration needs no TCC
+    /// and doesn't touch the camera. Used to pre-fill the mic picker on join and when it opens.
+    public func refreshAudioInputs() async {
         audioInputs = await transport.availableInputDevices(.audioInput)
+    }
+
+    /// Re-fetch the VIDEO (camera) input list. Kept OFF the join path and only called when the camera
+    /// picker opens or after camera access is granted: `CameraCapturer.captureDevices()` runs an
+    /// AVFoundation discovery session that can block, so enumerating it eagerly on join once stalled
+    /// the whole session (incl. remote-track rendering). Enumeration itself doesn't prompt for TCC,
+    /// but returns a limited/empty list until access is granted (toggleCamera preflights the grant).
+    public func refreshVideoInputs() async {
         videoInputs = await transport.availableInputDevices(.videoInput)
     }
 
-    /// Toggle the microphone on/off (publishes/unpublishes the audio track).
+    /// Pre-fill both pickers. Audio is fetched inline; video is fetched in a detached task so a slow
+    /// AVFoundation camera-discovery call can never block the caller (e.g. the join sequence).
+    public func refreshInputDevices() async {
+        await refreshAudioInputs()
+        Task { [weak self] in await self?.refreshVideoInputs() }
+    }
+
+    /// Toggle the microphone on/off. LiveKit MUTES the mic publication on disable (it doesn't
+    /// unpublish), so the live/muted state is read back from `isMicrophoneEnabled()` — not from
+    /// publication existence, which would report "on" even while muted and wedge the toggle.
     public func toggleMic() {
         let target = !micEnabled
+        // Optimistic UI: flip immediately so the icon responds even if the round-trip is slow, then
+        // reconcile with the transport's real state.
+        micEnabled = target
         Task {
             do {
                 try await transport.setMicrophone(enabled: target)
-                micEnabled = await transport.isAudioPublished()
             } catch {
                 AppLog.error("toggleMic failed: \(String(describing: error))")
             }
+            micEnabled = await transport.isMicrophoneEnabled()
         }
     }
 
@@ -327,16 +382,16 @@ public final class AppModel {
                     AppLog.error("camera access denied; not enabling webcam")
                     return
                 }
-                // A freshly granted permission makes new cameras enumerable — refresh the picker.
-                await refreshInputDevices()
+                // A freshly granted permission makes new cameras enumerable — refresh that picker.
+                await refreshVideoInputs()
             }
             do {
                 try await transport.setCamera(enabled: target, deviceID: selectedVideoInputID)
-                cameraEnabled = await transport.isCameraPublished()
-                localCameraTrack = cameraEnabled ? await transport.localCameraVideoTrack() : nil
             } catch {
                 AppLog.error("toggleCamera failed: \(String(describing: error))")
             }
+            cameraEnabled = await transport.isCameraPublished()
+            localCameraTrack = cameraEnabled ? await transport.localCameraVideoTrack() : nil
         }
     }
 

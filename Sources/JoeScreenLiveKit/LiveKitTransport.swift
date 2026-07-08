@@ -58,6 +58,11 @@ public actor LiveKitTransport: MediaTransport {
     /// app (M4) or a test (M2) to observe received frames. Nil = no rendering side effects.
     private var onTrackSubscribed: (@Sendable (String, RemoteVideoTrack) -> Void)?
 
+    /// Optional hook fired whenever the participant set changes (someone connects/disconnects, or a
+    /// (re)connection re-seeds the roster). Carries the CURRENT full set of participant IDs (remote +
+    /// local). The app drives its roster from this so peers appear even before they share anything.
+    private var onParticipantsChanged: (@Sendable (Set<ParticipantID>) -> Void)?
+
     /// Codec selection feeding VideoPublishOptions (D5). One selector describes the current share
     /// context; the app updates window count on share/unshare.
     private var codecSelector = CodecSelector(windowCount: 1)
@@ -75,6 +80,30 @@ public actor LiveKitTransport: MediaTransport {
         self.onTrackSubscribed = handler
         // Fire for any already-subscribed tracks so a late observer doesn't miss them.
         for (name, track) in remoteVideoTracks { handler(name, track) }
+    }
+
+    /// Install a hook fired whenever the participant set changes. Fires ONCE immediately with the
+    /// current set so a late observer is seeded, then on every connect/disconnect. Idempotent.
+    public func setOnParticipantsChanged(_ handler: @escaping @Sendable (Set<ParticipantID>) -> Void) {
+        self.onParticipantsChanged = handler
+        handler(currentParticipantIDs())
+    }
+
+    /// The current full participant set: the local participant plus every connected remote. Derived
+    /// live from the room, so it's correct after (re)connects regardless of who has shared anything.
+    public func currentParticipantIDs() -> Set<ParticipantID> {
+        var ids = Set<ParticipantID>()
+        if let localIdentity = room.localParticipant.identity?.stringValue,
+           let pid = participantID(forIdentity: localIdentity) {
+            ids.insert(pid)
+        }
+        for participant in room.remoteParticipants.values {
+            if let identity = participant.identity?.stringValue,
+               let pid = participantID(forIdentity: identity) {
+                ids.insert(pid)
+            }
+        }
+        return ids
     }
 
     /// The underlying room (for app-layer rendering that needs SwiftUIVideoView(track)).
@@ -217,9 +246,18 @@ public actor LiveKitTransport: MediaTransport {
     }
 
     /// Whether the local participant currently has a published audio track (M5 test hook — checks
-    /// publication metadata WITHOUT opening the capture device).
+    /// publication metadata WITHOUT opening the capture device). NOTE: `setMicrophone(enabled:false)`
+    /// MUTES the track rather than unpublishing it, so this stays true while muted — use
+    /// `isMicrophoneEnabled()` for the on/off UI state, and this only to assert a track exists.
     public func isAudioPublished() -> Bool {
         room.localParticipant.audioTracks.contains { $0.track != nil }
+    }
+
+    /// Whether the mic is currently LIVE (published AND unmuted). This is the correct source of truth
+    /// for the mute toggle: LiveKit mutes the mic publication on disable rather than unpublishing it,
+    /// so publication-existence alone would report "on" even while muted.
+    public func isMicrophoneEnabled() -> Bool {
+        room.localParticipant.isMicrophoneEnabled()
     }
 
     /// Count of remote audio-track publications this participant currently sees (M5 cross-Room
@@ -285,10 +323,11 @@ public actor LiveKitTransport: MediaTransport {
         room.localParticipant.firstCameraVideoTrack
     }
 
-    /// Whether the local participant currently publishes a CAMERA video track (metadata only — no
-    /// device access). Distinct from screen-share window tracks (source `.screenShareVideo`).
+    /// Whether the camera is currently LIVE (published AND unmuted). Correct source of truth for the
+    /// camera toggle: like the mic, `setCamera(enabled:false)` mutes rather than unpublishes, so
+    /// publication-existence alone would report "on" while the camera is muted.
     public func isCameraPublished() -> Bool {
-        room.localParticipant.videoTracks.contains { $0.source == .camera && $0.track != nil }
+        room.localParticipant.isCameraEnabled()
     }
 
     /// Count of remote CAMERA video-track publications this participant sees (cross-Room assertion —
@@ -329,20 +368,27 @@ public actor LiveKitTransport: MediaTransport {
 
     func handleConnectionState(_ state: MediaConnectionState) {
         updateState(state)
+        // On (re)connect the room re-seeds its participant list; refresh the roster so peers that
+        // were present across a reconnect reappear.
+        if state == .connected { onParticipantsChanged?(currentParticipantIDs()) }
     }
 
     func handleParticipantConnected(identity: String?) {
-        guard let identity, let pid = participantID(forIdentity: identity) else { return }
-        identityToParticipant[identity] = pid
-        participantToIdentity[pid] = identity
+        if let identity, let pid = participantID(forIdentity: identity) {
+            identityToParticipant[identity] = pid
+            participantToIdentity[pid] = identity
+        }
+        onParticipantsChanged?(currentParticipantIDs())
     }
 
     func handleParticipantDisconnected(identity: String?) {
-        guard let identity else { return }
-        if let pid = identityToParticipant[identity] {
-            participantToIdentity[pid] = nil
+        if let identity {
+            if let pid = identityToParticipant[identity] {
+                participantToIdentity[pid] = nil
+            }
+            identityToParticipant[identity] = nil
         }
-        identityToParticipant[identity] = nil
+        onParticipantsChanged?(currentParticipantIDs())
     }
 
     func handleTrackSubscribed(identity: String?, trackName: String, videoTrack: RemoteVideoTrack?) {

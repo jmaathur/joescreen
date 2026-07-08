@@ -25,7 +25,7 @@ struct MediaControlBar: View {
                 selectedID: model.selectedAudioInputID,
                 onToggle: { model.toggleMic() },
                 onSelect: { model.selectAudioInput($0) },
-                onMenuOpen: { Task { await model.refreshInputDevices() } })
+                onMenuOpen: { Task { await model.refreshAudioInputs() } })
 
             // Camera split-button: video.fill when live, video.slash.fill (red) when off.
             MediaSplitButton(
@@ -39,7 +39,7 @@ struct MediaControlBar: View {
                 selectedID: model.selectedVideoInputID,
                 onToggle: { model.toggleCamera() },
                 onSelect: { model.selectVideoInput($0) },
-                onMenuOpen: { Task { await model.refreshInputDevices() } })
+                onMenuOpen: { Task { await model.refreshVideoInputs() } })
 
             Spacer()
 
