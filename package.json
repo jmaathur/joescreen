@@ -17,7 +17,8 @@
 		"testflight:submit": "bash scripts/testflight-submit.sh",
 		"ship:setup": "bash scripts/testflight-setup.sh",
 		"asc:provision": "bash -c 'set -a; . ./.env.testflight; set +a; bun scripts/asc-provision.mjs \"$@\"' --",
-		"asc:create-app": "bash scripts/asc-create-app.sh"
+		"asc:create-app": "bash scripts/asc-create-app.sh",
+		"testflight:review": "bash -c 'set -a; . ./.env.testflight; set +a; bun scripts/asc-testflight-review.mjs \"$@\"' --"
 	},
 	"workspaces": [
 		"apps/*"
