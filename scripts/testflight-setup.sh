@@ -40,15 +40,32 @@ log_ok "APPLE_TEAM_ID = $APPLE_TEAM_ID"
 log_ok "ASC API key   = $ASC_API_KEY_ID (issuer ${ASC_API_ISSUER_ID:0:8}…)"
 log_ok ".p8 key       = $ASC_API_KEY_PATH"
 
-# 2. Provision (idempotent; ASC API).
+# 2. Provision bundle IDs (idempotent; ASC API key).
 echo ""
-echo "── Step 2/3: provision App Store Connect / portal identifiers"
+echo "── Step 2/4: provision bundle IDs"
 bun "$ROOT/scripts/asc-provision.mjs" $DRY
 
-# 3. Build + upload (skipped on dry-run).
+# 3. Ensure the App Store Connect app record exists. This is the ONE step the ASC API key can't do
+#    (Apple blocks POST /v1/apps); fastlane produce needs your Apple ID + 2FA. Skippable if you've
+#    already created it (set SKIP_APP_RECORD=1), or on dry-run.
+if [ -z "$DRY" ] && [ -z "${SKIP_APP_RECORD:-}" ]; then
+	echo ""
+	echo "── Step 3/4: ensure App Store Connect app record"
+	# Check via the API whether the record already exists; only invoke fastlane (which needs your
+	# Apple ID login) if it's missing — so re-runs don't prompt once the record is there.
+	APP_BUNDLE=$([ "$PLATFORM" = "mac" ] && echo "com.joescreen.app" || echo "com.joescreen.app.ios")
+	if bun "$ROOT/scripts/asc-app-exists.mjs" "$APP_BUNDLE" >/dev/null 2>&1; then
+		echo "   ✓ app record already exists for $APP_BUNDLE"
+	else
+		echo "   app record missing → creating via fastlane produce (needs your Apple ID + 2FA once)"
+		bash "$ROOT/scripts/asc-create-app.sh" "$PLATFORM"
+	fi
+fi
+
+# 4. Build + upload (skipped on dry-run).
 if [ -n "$DRY" ]; then
 	echo ""
-	echo "── Step 3/3: build + upload  [SKIPPED on --dry-run]"
+	echo "── Step 4/4: build + upload  [SKIPPED on --dry-run]"
 	echo ""
 	echo "Dry run complete. Re-run without --dry-run to provision for real and ship:"
 	echo "   bun run ship:setup $PLATFORM"
@@ -56,7 +73,7 @@ if [ -n "$DRY" ]; then
 fi
 
 echo ""
-echo "── Step 3/3: build + upload ($PLATFORM) to TestFlight"
+echo "── Step 4/4: build + upload ($PLATFORM) to TestFlight"
 bash "$ROOT/scripts/testflight.sh" "$PLATFORM"
 
 echo ""
