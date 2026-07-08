@@ -35,6 +35,18 @@ fi
 
 [ "$PLATFORM" = "ios" ] && TYPE="ios" || TYPE="macos"
 
+# altool --apiKey does NOT accept an explicit key path — it only searches a few fixed dirs
+# (~/.appstoreconnect/private_keys, ~/private_keys, …) for AuthKey_<KEYID>.p8. Stage our key there
+# (named exactly AuthKey_<KEYID>.p8) so altool finds it, regardless of where ASC_API_KEY_PATH points.
+STAGE_DIR="$HOME/.appstoreconnect/private_keys"
+STAGED_KEY="$STAGE_DIR/AuthKey_${ASC_API_KEY_ID}.p8"
+if [ ! -f "$STAGED_KEY" ]; then
+	mkdir -p "$STAGE_DIR"
+	cp "$ASC_API_KEY_PATH" "$STAGED_KEY"
+	chmod 600 "$STAGED_KEY"
+	echo "── staged ASC key → $STAGED_KEY (altool looks here)"
+fi
+
 echo "── uploading $ARTIFACT to TestFlight ($TYPE)…"
 run_logged "$BUILD_DIR/logs/upload-$PLATFORM.log" \
 	xcrun altool --upload-app -f "$ARTIFACT" -t "$TYPE" \
