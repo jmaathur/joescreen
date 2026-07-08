@@ -32,28 +32,55 @@ unverified.
 - For the media plane: a reachable **LiveKit server** (or `livekit-server --dev` on the LAN for local
   testing). See `infra/`.
 
-## Quickstart — a real call between two instances on one Mac
+## Monorepo layout
 
-```bash
-# 1. Media plane (self-hosted SFU). livekit-server is NOT preinstalled:
-brew install livekit && livekit-server --dev &
+This is a **bun + turborepo** monorepo (the JS tooling is only the task runner / single-command
+entrypoint — the app itself is Swift, built by Xcode):
 
-# 2. Generate the Xcode project (the .xcodeproj is gitignored; project.yml is the source of truth)
-#    and build the macOS app. XcodeGen 2.42.0 + Xcode 26.1.
-xcodegen generate --spec Apps/project.yml
-xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-macOS -derivedDataPath build build
-
-# 3. Launch TWO instances (open -n is REQUIRED to spawn a second, not focus the first).
-#    Each gets a fresh identity — LiveKit evicts duplicate-identity holders.
-APP=build/Build/Products/Debug/JoeScreen.app
-open -n "$APP" --args --join-url ws://localhost:7880 --room demo --identity "$(uuidgen)"
-open -n "$APP" --args --join-url ws://localhost:7880 --room demo --identity "$(uuidgen)"
-
-# 4. Instance A: Share → pick a window (grant Screen Recording once).  B: watch it live in a native
-#    window. (Or bypass the picker: add `--share-window-id <CGWindowID>` to A's launch args.)
+```
+.                      repo root: package.json (bun workspaces), turbo.json, bunfig.toml, scripts/
+├─ apps/
+│  ├─ joescreen/       the Swift project — Package.swift, Sources/, Tests/, Apps/ (macOS + iOS)
+│  └─ livekit/         self-hosted LiveKit SFU config + token server (dev + docker-compose)
+├─ scripts/           dev.sh (the single command), app.sh, livekit.sh
+└─ docs/  README.md  DECISIONS.md  RISKS.md  TESTING.md
 ```
 
-The iOS viewer app (viewer + voice only — iOS can't be remote-controlled):
+## Quickstart — one command
+
+Requires `bun`, `livekit-server` (`brew install livekit`), and `xcodegen` (`brew install xcodegen`).
+
+```bash
+bun install          # once — installs turbo
+bun run dev          # starts the LiveKit dev SFU, builds, and launches the macOS app joined to it
+```
+
+`bun run dev` starts `livekit-server --dev` (reusing one if already running), builds the
+`JoeScreen-macOS` app, and launches it joined to `ws://localhost:7880`. Ctrl-C stops the SFU. Open a
+second window in the same room (to get a real two-party call) with:
+
+```bash
+bun run app          # build + launch another instance (fresh identity, same "demo" room)
+bun run dev my-room  # or use a custom room name
+```
+
+Then in instance A: **Share → pick a window** (grant Screen Recording once); B watches it live in a
+native window. Component scripts are also runnable on their own: `bun run livekit` (just the SFU),
+`bun run app` (just build+launch).
+
+### Manual path (no bun)
+
+The Swift/Xcode build is unchanged — run it directly from `apps/joescreen/`:
+
+```bash
+cd apps/joescreen
+xcodegen generate --spec Apps/project.yml
+xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-macOS -derivedDataPath build build
+APP=build/Build/Products/Debug/JoeScreen.app
+open -n "$APP" --args --join-url ws://localhost:7880 --room demo --identity "$(uuidgen)"
+```
+
+The iOS viewer app (viewer + voice only — iOS can't be remote-controlled), from `apps/joescreen/`:
 
 ```bash
 xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-iOS \

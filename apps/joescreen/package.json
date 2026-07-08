@@ -1,0 +1,12 @@
+{
+	"name": "@joescreen/app",
+	"version": "0.1.0",
+	"private": true,
+	"description": "JoeScreen — SharePlay-based CoScreen clone (Swift macOS + iOS). Built by Xcode; this package.json only exposes the Swift/Xcode build to the turbo task graph.",
+	"scripts": {
+		"build": "xcodegen generate --spec Apps/project.yml && xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-macOS -derivedDataPath build build",
+		"test": "swift test",
+		"dev": "bash ../../scripts/app.sh",
+		"clean": "rm -rf build .build Apps/JoeScreen.xcodeproj"
+	}
+}

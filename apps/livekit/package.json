@@ -1,0 +1,10 @@
+{
+	"name": "@joescreen/livekit",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Self-hosted LiveKit SFU dev/prod config + token server for JoeScreen. `dev` runs livekit-server in dev mode; production uses docker-compose (see README).",
+	"scripts": {
+		"dev": "bash ../../scripts/livekit.sh",
+		"build": "echo 'no build step — livekit-server is a prebuilt binary / docker image'"
+	}
+}

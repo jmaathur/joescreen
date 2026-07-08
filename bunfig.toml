@@ -1,0 +1,4 @@
+[install]
+# Hoisted node_modules layout (matches the golf-app monorepo convention). Keeps a single flat
+# node_modules at the root so tooling that walks directories resolves predictably.
+linker = "hoisted"

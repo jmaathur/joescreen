@@ -1,4 +1,11 @@
 .DS_Store
+
+# ── Monorepo (bun + turbo) ──────────────────────────────────────────────
+node_modules/
+.turbo/
+*.tsbuildinfo
+
+# ── Swift / Xcode build outputs (now under apps/joescreen/) ──────────────
 build/
 build-ios/
 .build/
@@ -7,16 +14,19 @@ DerivedData/
 xcuserdata/
 
 # The Xcode project is GENERATED from Apps/project.yml (which IS committed). Regenerate with:
-#   xcodegen generate --spec Apps/project.yml
-Apps/*.xcodeproj/
+#   xcodegen generate --spec Apps/project.yml   (run from apps/joescreen/)
+# Path-agnostic so it matches apps/joescreen/Apps/*.xcodeproj too.
+*.xcodeproj/
 # XcodeGen also generates the Info.plist from project.yml's `info:` blocks — the committed
 # source-of-truth is project.yml, not the emitted plist, so ignore the generated plists to avoid
-# drift. The entitlements files ARE hand-written and committed.
-Apps/macOS/Resources/Info-macOS.plist
-Apps/iOS/Resources/Info-iOS.plist
+# drift. The entitlements files ARE hand-written and committed. (Match at any depth.)
+**/Resources/Info-macOS.plist
+**/Resources/Info-iOS.plist
 .swiftpm/xcode/package.xcworkspace/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
+
+# ── env / secrets ───────────────────────────────────────────────────────
 .env
 TEAM_ID.local
 
