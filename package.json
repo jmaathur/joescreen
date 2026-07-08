@@ -9,6 +9,7 @@
 		"dev": "bash scripts/dev.sh",
 		"livekit": "bash scripts/livekit.sh",
 		"app": "bash scripts/app.sh",
+		"tunnel:testflight": "bash scripts/tunnel-testflight.sh",
 		"build": "turbo run build",
 		"test": "turbo run test",
 		"clean": "turbo run clean",
