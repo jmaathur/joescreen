@@ -69,7 +69,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app
         PRODUCT_NAME: JoeScreen
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "5"
+        CURRENT_PROJECT_VERSION: "6"
         # Empty entitlements by default (Killed-9 avoidance). Swap to the -team file for a real team.
         CODE_SIGN_ENTITLEMENTS: macOS/Resources/JoeScreen-macOS-empty.entitlements
         # Non-sandboxed Developer-ID distribution (D6): App Sandbox deliberately absent.
@@ -80,7 +80,7 @@ targets:
         CFBundleName: JoeScreen
         CFBundleDisplayName: JoeScreen
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "5"
+        CFBundleVersion: "6"
         LSMinimumSystemVersion: "14.0"
         # App Store category (required for App Store Connect / TestFlight submission).
         LSApplicationCategoryType: "public.app-category.productivity"
@@ -128,7 +128,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app.ios
         PRODUCT_NAME: JoeScreen
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "5"
+        CURRENT_PROJECT_VERSION: "6"
         TARGETED_DEVICE_FAMILY: "1,2"   # iPhone + iPad
         # App icon from the asset catalog → emits CFBundleIconName (App Store validation requires it).
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -149,7 +149,7 @@ targets:
         CFBundleName: JoeScreen
         CFBundleDisplayName: JoeScreen
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "5"
+        CFBundleVersion: "6"
         # App Store category + export-compliance (same rationale as macOS above).
         LSApplicationCategoryType: "public.app-category.productivity"
         ITSAppUsesNonExemptEncryption: false
