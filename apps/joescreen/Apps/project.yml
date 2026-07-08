@@ -82,6 +82,11 @@ targets:
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "14.0"
+        # App Store category (required for App Store Connect / TestFlight submission).
+        LSApplicationCategoryType: "public.app-category.productivity"
+        # Export compliance: the app uses only standard exempt encryption (HTTPS/TLS via the LiveKit
+        # SDK), so declare non-exempt=false to skip the per-upload compliance prompt in App Store Connect.
+        ITSAppUsesNonExemptEncryption: false
         # SwiftUI app has no storyboard/nib; the @main App scene owns the window.
         NSHighResolutionCapable: true
         # Mic usage string (M5 voice via LiveKit setMicrophone; required or the app crashes on ask).
@@ -123,10 +128,14 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1,2"   # iPhone + iPad
-        # iOS is always sandboxed; ad-hoc/automatic signing when TEAM_ID is unset.
-        CODE_SIGN_IDENTITY: ""
+        # Entitlements: SharePlay group-session + App Group (backs NSSupportsGroupActivities).
+        CODE_SIGN_ENTITLEMENTS: iOS/Resources/JoeScreen-iOS.entitlements
+        # Signing is ALLOWED so a Release/TestFlight archive can be code-signed. The ship scripts
+        # (scripts/build-ipa.sh) pass CODE_SIGN_STYLE=Automatic + DEVELOPMENT_TEAM on the archive
+        # command; local Debug builds still run unsigned/ad-hoc (CODE_SIGNING_REQUIRED stays NO here).
+        CODE_SIGN_STYLE: Automatic
         CODE_SIGNING_REQUIRED: "NO"
-        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_ALLOWED: "YES"
     info:
       path: iOS/Resources/Info-iOS.plist
       properties:
@@ -134,6 +143,9 @@ targets:
         CFBundleDisplayName: JoeScreen
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
+        # App Store category + export-compliance (same rationale as macOS above).
+        LSApplicationCategoryType: "public.app-category.productivity"
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
