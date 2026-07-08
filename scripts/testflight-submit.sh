@@ -48,9 +48,27 @@ if [ ! -f "$STAGED_KEY" ]; then
 fi
 
 echo "── uploading $ARTIFACT to TestFlight ($TYPE)…"
-run_logged "$BUILD_DIR/logs/upload-$PLATFORM.log" \
-	xcrun altool --upload-app -f "$ARTIFACT" -t "$TYPE" \
-		--apiKey "$ASC_API_KEY_ID" --apiIssuer "$ASC_API_ISSUER_ID"
+UPLOAD_LOG="$BUILD_DIR/logs/upload-$PLATFORM.log"
+mkdir -p "$BUILD_DIR/logs"
+# Run altool directly (not via run_logged) so we get its real exit code, and tee to a log.
+set +e
+xcrun altool --upload-app -f "$ARTIFACT" -t "$TYPE" \
+	--apiKey "$ASC_API_KEY_ID" --apiIssuer "$ASC_API_ISSUER_ID" 2>&1 | tee "$UPLOAD_LOG"
+RC="${PIPESTATUS[0]}"
+set -e
 
+if [ "$RC" -ne 0 ]; then
+	echo "" >&2
+	echo "✖ upload FAILED (altool exit $RC)." >&2
+	if grep -q "Cannot determine the Apple ID from Bundle ID" "$UPLOAD_LOG" 2>/dev/null; then
+		echo "  → No App Store Connect app record exists for this bundle id yet." >&2
+		echo "    Create it: App Store Connect → Apps → +  → New App" >&2
+		echo "      Platform: iOS   Bundle ID: com.joescreen.app.ios   (Name must be globally unique)" >&2
+		echo "    Then wait ~1-2 min for it to propagate and re-run: bun run testflight:submit ios" >&2
+	fi
+	exit "$RC"
+fi
+
+echo ""
 echo "✓ uploaded. It appears in App Store Connect → TestFlight after processing (a few minutes)."
 echo "  First external-tester distribution needs a one-time Beta App Review (~1 day)."
