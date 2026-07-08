@@ -156,6 +156,13 @@ targets:
         # Name of the app-icon set in Assets.xcassets. Apple validation requires this key explicitly
         # (actool doesn't always merge it into the plist), so declare it here to be certain.
         CFBundleIconName: AppIcon
+        # App Transport Security: allow non-TLS connections so the viewer can reach a plaintext dev
+        # SFU (ws://localhost / ws://<lan>) and http token server during testing. NSAllowsLocalNetworking
+        # permits loopback/LAN without TLS; NSAllowsArbitraryLoads covers a plaintext tunnel URL too.
+        # (A production SFU uses wss:// + a real cert, which ATS accepts without these.)
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
         UILaunchScreen: {}
         # iPad multitasking requires ALL FOUR orientations (Apple validation rejects a partial set).
         UISupportedInterfaceOrientations~ipad:
