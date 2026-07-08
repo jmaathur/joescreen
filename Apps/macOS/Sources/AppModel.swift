@@ -4,6 +4,8 @@ import JoeScreenKit
 import JoeScreenLiveKit
 import JoeScreenCaptureMac
 import ScreenCaptureKit
+import AVFoundation
+import LiveKit
 
 /// The central @MainActor observable app state and orchestrator for the macOS client.
 ///
@@ -37,6 +39,23 @@ public final class AppModel {
     /// Remote video tracks we're rendering, keyed by JoeScreen windowID (parsed from the track name).
     /// The RemoteWindowManager opens/closes native NSWindows to match this set.
     public private(set) var remoteWindows: [WindowID: RemoteVideoWindow] = [:]
+
+    // MARK: - Local media controls (mic + webcam)
+
+    /// Whether the local microphone is currently publishing. Drives the mic toggle in the control bar.
+    public private(set) var micEnabled: Bool = false
+    /// Whether the local webcam is currently publishing. Drives the camera toggle in the control bar.
+    public private(set) var cameraEnabled: Bool = false
+    /// The selectable audio-input devices for the mic dropdown (refreshed on join / when opened).
+    public private(set) var audioInputs: [MediaInputDevice] = []
+    /// The selectable webcam devices for the camera dropdown (refreshed on join / after camera TCC).
+    public private(set) var videoInputs: [MediaInputDevice] = []
+    /// The chosen audio-input device id (nil = system default). Shows a checkmark in the mic dropdown.
+    public private(set) var selectedAudioInputID: String?
+    /// The chosen webcam device id (nil = system default). Shows a checkmark in the camera dropdown.
+    public private(set) var selectedVideoInputID: String?
+    /// The local webcam track for the self-preview tile; non-nil exactly while the camera is on.
+    public private(set) var localCameraTrack: VideoTrack?
 
     /// Windows this instance is locally sharing (capture services), keyed by windowID.
     private var localCaptures: [WindowID: WindowCaptureService] = [:]
@@ -114,6 +133,10 @@ public final class AppModel {
             startStatePump(state)
             // Enable the mic on join (M5).
             try? await transport.setMicrophone(enabled: true)
+            micEnabled = await transport.isAudioPublished()
+            // Populate the input-device pickers for the control bar (mic + webcam). Camera devices
+            // may be empty until camera TCC is granted; refreshInputDevices() re-fetches after that.
+            await refreshInputDevices()
             // Start the cursor pump (M6).
             let cursor = try await transport.openDataChannel(.cursor)
             let pump = CursorPump(channel: cursor, localID: localParticipantID)
@@ -149,6 +172,13 @@ public final class AppModel {
         await transport.disconnect()
         windowManager.closeAll()
         remoteWindows.removeAll()
+        micEnabled = false
+        cameraEnabled = false
+        localCameraTrack = nil
+        audioInputs = []
+        videoInputs = []
+        selectedAudioInputID = nil
+        selectedVideoInputID = nil
         phase = .idle
         participants = []
         room = RoomModel()
@@ -255,6 +285,84 @@ public final class AppModel {
         guard let pump = cursorPump else { return }
         let ts = ProcessInfo.processInfo.systemUptime
         Task { await pump.sendLocalCursor(windowID: windowID, point: point, timestamp: ts) }
+    }
+
+    // MARK: - Local media controls (mic + webcam)
+
+    /// Re-fetch the audio + video input device lists. Called on join and whenever a picker opens so
+    /// hot-plugged devices (and cameras newly visible after a TCC grant) show up.
+    public func refreshInputDevices() async {
+        audioInputs = await transport.availableInputDevices(.audioInput)
+        videoInputs = await transport.availableInputDevices(.videoInput)
+    }
+
+    /// Toggle the microphone on/off (publishes/unpublishes the audio track).
+    public func toggleMic() {
+        let target = !micEnabled
+        Task {
+            do {
+                try await transport.setMicrophone(enabled: target)
+                micEnabled = await transport.isAudioPublished()
+            } catch {
+                AppLog.error("toggleMic failed: \(String(describing: error))")
+            }
+        }
+    }
+
+    /// Route the mic to a specific input device (nil = keep current). Persists the selection so the
+    /// checkmark and future captures follow it.
+    public func selectAudioInput(_ deviceID: String) {
+        selectedAudioInputID = deviceID
+        Task { await transport.selectAudioInput(deviceID: deviceID) }
+    }
+
+    /// Toggle the webcam on/off. Enabling preflights camera TCC (deterministic system prompt) and,
+    /// on success, publishes a camera track + exposes the local track for the self-preview tile.
+    public func toggleCamera() {
+        let target = !cameraEnabled
+        Task {
+            if target {
+                let granted = await Self.ensureCameraAccess()
+                guard granted else {
+                    AppLog.error("camera access denied; not enabling webcam")
+                    return
+                }
+                // A freshly granted permission makes new cameras enumerable — refresh the picker.
+                await refreshInputDevices()
+            }
+            do {
+                try await transport.setCamera(enabled: target, deviceID: selectedVideoInputID)
+                cameraEnabled = await transport.isCameraPublished()
+                localCameraTrack = cameraEnabled ? await transport.localCameraVideoTrack() : nil
+            } catch {
+                AppLog.error("toggleCamera failed: \(String(describing: error))")
+            }
+        }
+    }
+
+    /// Switch the active webcam. If the camera is already on, republishes from the new device;
+    /// otherwise just records the selection for the next enable.
+    public func selectVideoInput(_ deviceID: String) {
+        selectedVideoInputID = deviceID
+        guard cameraEnabled else { return }
+        Task {
+            do {
+                try await transport.setCamera(enabled: true, deviceID: deviceID)
+                localCameraTrack = await transport.localCameraVideoTrack()
+            } catch {
+                AppLog.error("selectVideoInput failed: \(String(describing: error))")
+            }
+        }
+    }
+
+    /// Request camera TCC up front so the system prompt fires deterministically (mirrors the
+    /// Screen-Recording preflight in `startSharing`). Returns whether access is authorized.
+    private static func ensureCameraAccess() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: return true
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .video)
+        default: return false
+        }
     }
 
     // MARK: - Sharing

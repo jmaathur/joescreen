@@ -18,6 +18,9 @@ struct SessionView: View {
                 SharesPane()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            Divider()
+            // Bottom control bar: mic + camera split-buttons and Leave (CoScreen-style layout).
+            MediaControlBar()
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -27,9 +30,6 @@ struct SessionView: View {
                     Label("Share Window", systemImage: "plus.rectangle.on.rectangle")
                 }
                 .help("Share one of your windows with the room")
-            }
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Leave") { model.leave() }
             }
         }
     }
@@ -74,7 +74,8 @@ struct SharesPane: View {
 
     var body: some View {
         let shared = model.sharedWindowsSorted
-        if shared.isEmpty {
+        // Nothing to show at all (no shares, camera off) → the empty-state hint.
+        if shared.isEmpty && model.localCameraTrack == nil {
             VStack(spacing: 10) {
                 Image(systemName: "rectangle.dashed")
                     .font(.system(size: 32))
@@ -90,6 +91,10 @@ struct SharesPane: View {
         } else {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 12)], spacing: 12) {
+                    // Local webcam self-preview (only while the camera is on), alongside shares.
+                    if let track = model.localCameraTrack {
+                        SelfPreviewTile(track: track)
+                    }
                     ForEach(shared, id: \.window) { entry in
                         SharedWindowTile(windowID: entry.window, ownerID: entry.owner)
                     }

@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import LiveKit
 import JoeScreenKit
 
@@ -37,6 +38,11 @@ public actor LiveKitTransport: MediaTransport {
         var publication: LocalTrackPublication?
     }
     private var publishedTracks: [WindowID: PublishedTrack] = [:]
+
+    /// The local webcam publication (the "camera bubble" — distinct from screen-share window
+    /// tracks). Nil when the camera is off. LiveKit owns the camera capturer; we keep the
+    /// publication only to unpublish and to reach the local track for self-preview.
+    private var cameraPublication: LocalTrackPublication?
 
     /// Identity binding: transport identity string ↔ ParticipantID (§3 input-authorization needs it).
     private var identityToParticipant: [String: ParticipantID] = [:]
@@ -109,6 +115,7 @@ public actor LiveKitTransport: MediaTransport {
         for ch in dataChannels.values { ch.finish() }
         dataChannels.removeAll()
         publishedTracks.removeAll()
+        cameraPublication = nil
         remoteVideoTracks.removeAll()
         if let observer { room.remove(delegate: observer) }
         observer = nil
@@ -221,6 +228,75 @@ public actor LiveKitTransport: MediaTransport {
         var count = 0
         for participant in room.remoteParticipants.values {
             count += participant.audioTracks.count
+        }
+        return count
+    }
+
+    // MARK: - Local capture devices (mic input + webcam) — F11 camera bubbles
+
+    /// Enumerate selectable input devices of `kind`. Cameras come from `CameraCapturer.captureDevices()`
+    /// (AVFoundation, gated by camera TCC); audio inputs from LiveKit's macOS `AudioManager`. Returns
+    /// `[]` if enumeration throws (e.g. TCC not yet granted) rather than surfacing an error to the UI.
+    public func availableInputDevices(_ kind: MediaDeviceKind) async -> [MediaInputDevice] {
+        switch kind {
+        case .videoInput:
+            guard let devices = try? await CameraCapturer.captureDevices() else { return [] }
+            // AVFoundation has no "is default camera" concept; leave isDefault false for all.
+            return devices.map { MediaInputDevice(id: $0.uniqueID, name: $0.localizedName, isDefault: false) }
+        case .audioInput:
+            return AudioManager.shared.inputDevices.map {
+                MediaInputDevice(id: $0.deviceId, name: $0.name, isDefault: $0.isDefault)
+            }
+        }
+    }
+
+    /// Route mic capture to the input device with `deviceID`. macOS-only (AudioManager input-device
+    /// selection is a no-op elsewhere); an unknown id is ignored.
+    public func selectAudioInput(deviceID: String) async {
+        guard let device = AudioManager.shared.inputDevices.first(where: { $0.deviceId == deviceID }) else { return }
+        AudioManager.shared.inputDevice = device
+    }
+
+    /// Enable/disable the local webcam, capturing from `deviceID` (nil = system default). Publishes a
+    /// `.camera`-source video track when enabled; unpublishes when disabled. LiveKit owns the camera
+    /// capturer + encode. Needs `NSCameraUsageDescription` + camera TCC (the app preflights the grant).
+    public func setCamera(enabled: Bool, deviceID: String?) async throws {
+        guard enabled else {
+            _ = try await room.localParticipant.setCamera(enabled: false)
+            cameraPublication = nil
+            return
+        }
+        // Resolve the chosen AVCaptureDevice so the capture options bind to that exact camera.
+        var captureOptions: CameraCaptureOptions?
+        if let deviceID {
+            let devices = try await CameraCapturer.captureDevices()
+            if let device = devices.first(where: { $0.uniqueID == deviceID }) {
+                captureOptions = CameraCaptureOptions(device: device)
+            }
+        }
+        cameraPublication = try await room.localParticipant.setCamera(
+            enabled: true, captureOptions: captureOptions)
+    }
+
+    /// The local webcam video track for a self-preview (`SwiftUIVideoView(track, mirrorMode: .mirror)`).
+    /// Nil when the camera is off. LiveKit-typed on purpose — this is an app-layer rendering
+    /// convenience on the concrete adapter, NOT part of the framework-free `MediaTransport` seam.
+    public func localCameraVideoTrack() -> VideoTrack? {
+        room.localParticipant.firstCameraVideoTrack
+    }
+
+    /// Whether the local participant currently publishes a CAMERA video track (metadata only — no
+    /// device access). Distinct from screen-share window tracks (source `.screenShareVideo`).
+    public func isCameraPublished() -> Bool {
+        room.localParticipant.videoTracks.contains { $0.source == .camera && $0.track != nil }
+    }
+
+    /// Count of remote CAMERA video-track publications this participant sees (cross-Room assertion —
+    /// metadata only). Excludes screen-share window tracks.
+    public func remoteVideoTrackCount() -> Int {
+        var count = 0
+        for participant in room.remoteParticipants.values {
+            count += participant.videoTracks.filter { $0.source == .camera }.count
         }
         return count
     }

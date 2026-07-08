@@ -86,8 +86,11 @@ targets:
         NSHighResolutionCapable: true
         # Mic usage string (M5 voice via LiveKit setMicrophone; required or the app crashes on ask).
         NSMicrophoneUsageDescription: "JoeScreen uses your microphone for live voice during a shared session."
-        # Camera string reserved for optional camera bubbles (F11); harmless to declare early.
+        # Camera string for the webcam bubbles (F11): shown in the camera-TCC prompt.
         NSCameraUsageDescription: "JoeScreen can share your camera as an optional video bubble."
+        # Opt in to Continuity Camera (iPhone as webcam) in AVFoundation device enumeration; without
+        # this, CameraCapturer.captureDevices() logs a warning and omits the Continuity device.
+        NSCameraUseContinuityCameraDeviceType: true
         # SharePlay support flag (M7). Declaring it is inert without the group-session entitlement.
         NSSupportsGroupActivities: true
         # Custom URL scheme for `joescreen://join?...` deep-link joins (Direct Session Mode, §1).

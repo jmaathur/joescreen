@@ -24,6 +24,33 @@ public enum MediaConnectionState: Sendable, Equatable {
     case failed(reason: String)
 }
 
+/// A selectable capture device (a webcam, or an audio input) surfaced to the UI WITHOUT this
+/// package naming AVFoundation / LiveKit device types. The adapter maps its SDK's device objects
+/// to this shape; `id` is the adapter's stable device handle (an `AVCaptureDevice.uniqueID` for
+/// cameras, a Core Audio device id for mics) and round-trips back through `selectAudioInput` /
+/// `setCamera` to pick that exact device.
+public struct MediaInputDevice: Sendable, Identifiable, Equatable {
+    /// Adapter-stable device handle (camera `uniqueID` / audio `deviceId`). Opaque to the UI.
+    public let id: String
+    /// Human-readable device name for the picker (e.g. "FaceTime HD Camera").
+    public let name: String
+    /// Whether the OS considers this the current system-default device for its kind.
+    public let isDefault: Bool
+
+    public init(id: String, name: String, isDefault: Bool) {
+        self.id = id
+        self.name = name
+        self.isDefault = isDefault
+    }
+}
+
+/// Which family of input devices to enumerate. Output (speaker) selection is a separate concern
+/// the UI doesn't expose yet, so it's intentionally absent.
+public enum MediaDeviceKind: Sendable, Equatable {
+    case audioInput
+    case videoInput
+}
+
 /// What a transport needs to reach the media plane. For the v1 LiveKit star this is the SFU URL
 /// plus the JWT minted by the token endpoint; the feature-flagged LAN mesh mode reuses the same
 /// shape with a local descriptor.
@@ -108,4 +135,29 @@ public protocol MediaTransport: Sendable {
     /// Open (or return the already-open) typed data channel for `channel`, configured per its
     /// `ChannelPolicy`.
     func openDataChannel(_ channel: DataChannel) async throws -> any WireDataChannel
+
+    // MARK: - Local capture devices (mic + webcam)
+
+    /// Enumerate the selectable input devices of `kind` (webcams or audio inputs). The list is a
+    /// snapshot; the UI re-fetches when a picker opens or after a permission grant changes it.
+    /// Returns `[]` when the platform can't enumerate (e.g. TCC not yet granted, or non-macOS).
+    func availableInputDevices(_ kind: MediaDeviceKind) async -> [MediaInputDevice]
+
+    /// Enable/disable the local microphone. The SDK owns capture + AEC. Needs
+    /// `NSMicrophoneUsageDescription` + mic TCC. Toggling off unpublishes the audio track.
+    func setMicrophone(enabled: Bool) async throws
+
+    /// Route microphone capture to the input device with `deviceID` (an `id` from
+    /// `availableInputDevices(.audioInput)`). No-op if the id isn't found. Takes effect for the
+    /// current and subsequent mic capture.
+    func selectAudioInput(deviceID: String) async
+
+    /// Enable/disable the local webcam, capturing from the camera with `deviceID` (an `id` from
+    /// `availableInputDevices(.videoInput)`; `nil` = system default). Publishes a camera video
+    /// track when enabled, unpublishes when disabled. Needs `NSCameraUsageDescription` + camera TCC.
+    func setCamera(enabled: Bool, deviceID: String?) async throws
+
+    /// Whether the local participant currently has a published CAMERA video track (distinct from
+    /// screen-share window tracks). Metadata only — does not open the capture device.
+    func isCameraPublished() async -> Bool
 }
