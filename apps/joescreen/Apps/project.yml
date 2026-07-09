@@ -53,6 +53,8 @@ targets:
     sources:
       - path: macOS/Sources
       - path: Shared/Sources
+      # App icon asset catalog (App Store requires a full macOS icon set + CFBundleIconName).
+      - path: macOS/Resources/Assets.xcassets
     dependencies:
       - package: JoeScreen
         product: JoeScreenKit
@@ -70,9 +72,14 @@ targets:
         PRODUCT_NAME: JoeScreen
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "8"
-        # Empty entitlements by default (Killed-9 avoidance). Swap to the -team file for a real team.
-        CODE_SIGN_ENTITLEMENTS: macOS/Resources/JoeScreen-macOS-empty.entitlements
-        # Non-sandboxed Developer-ID distribution (D6): App Sandbox deliberately absent.
+        # App icon from the asset catalog → emits CFBundleIconName (App Store validation requires it).
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Entitlements file, overridable by the ship scripts via ${SHIP_MAC_ENTITLEMENTS}. Defaults to
+        # the EMPTY file so `bun run dev` (ad-hoc, no TEAM_ID) launches without an AMFI Killed-9; the
+        # ship path sets it to the -appstore file (minimal, App-Store-signable). dev.sh/app.sh export
+        # the default too since xcodegen has no default syntax.
+        CODE_SIGN_ENTITLEMENTS: ${SHIP_MAC_ENTITLEMENTS}
+        # Non-sandboxed Developer-ID/TestFlight distribution (D6): App Sandbox deliberately absent.
         ENABLE_APP_SANDBOX: "NO"
     info:
       path: macOS/Resources/Info-macOS.plist
@@ -82,6 +89,8 @@ targets:
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "8"
         LSMinimumSystemVersion: "14.0"
+        # App icon set name (App Store validation requires the key explicitly, like iOS).
+        CFBundleIconName: AppIcon
         # App Store category (required for App Store Connect / TestFlight submission).
         LSApplicationCategoryType: "public.app-category.productivity"
         # Export compliance: the app uses only standard exempt encryption (HTTPS/TLS via the LiveKit

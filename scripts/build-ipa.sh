@@ -55,12 +55,18 @@ EXPORT_OPTS="$RENDERED_OPTS"
 # ships now. After SharePlay is approved for the App ID, pass SHIP_ENTITLEMENTS=full to re-enable it.
 # The choice is passed to xcodegen via SHIP_IOS_ENTITLEMENTS, which project.yml reads (target-scoped,
 # so it does NOT leak to LiveKit/SwiftProtobuf/etc.).
+# Both entitlement env vars must be set so xcodegen resolves BOTH targets' ${...} paths (it generates
+# all targets regardless of which we build). Defaults are the minimal/App-Store-signable files.
+export SHIP_IOS_ENTITLEMENTS="${SHIP_IOS_ENTITLEMENTS:-iOS/Resources/JoeScreen-iOS-minimal.entitlements}"
+export SHIP_MAC_ENTITLEMENTS="${SHIP_MAC_ENTITLEMENTS:-macOS/Resources/JoeScreen-macOS-appstore.entitlements}"
 if [ "$PLATFORM" = "ios" ]; then
 	case "${SHIP_ENTITLEMENTS:-minimal}" in
 		full)    export SHIP_IOS_ENTITLEMENTS="iOS/Resources/JoeScreen-iOS.entitlements"; echo "── iOS entitlements: FULL (SharePlay + App Group — needs group-session approved)";;
 		minimal) export SHIP_IOS_ENTITLEMENTS="iOS/Resources/JoeScreen-iOS-minimal.entitlements"; echo "── iOS entitlements: MINIMAL (viewer+voice; no SharePlay yet)";;
 		*) echo "✖ SHIP_ENTITLEMENTS must be 'minimal' or 'full'" >&2; exit 1;;
 	esac
+else
+	echo "── macOS entitlements: App Store minimal (non-sandboxed; no SharePlay yet)"
 fi
 
 echo "── regenerating Xcode project (TEAM_ID=$APPLE_TEAM_ID)"
