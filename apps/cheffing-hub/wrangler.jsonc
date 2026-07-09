@@ -1,0 +1,27 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "cheffing-hub",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-02-19",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	},
+	// The cheffing.dev root: a hub landing page listing the dev tools (JoeScreen + future ones).
+	// Each tool lives on its own subdomain (e.g. joescreen.cheffing.dev). No bindings — static Hono.
+	"vars": {
+		"ENVIRONMENT": "development"
+	},
+	"env": {
+		"production": {
+			"name": "cheffing-hub",
+			"routes": [
+				{ "pattern": "cheffing.dev", "custom_domain": true },
+				{ "pattern": "www.cheffing.dev", "custom_domain": true }
+			],
+			"vars": {
+				"ENVIRONMENT": "production"
+			}
+		}
+	}
+}

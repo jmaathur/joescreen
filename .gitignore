@@ -38,3 +38,7 @@ TEAM_ID.local
 
 # Cloudflare Worker local dev state (miniflare cache / R2 sim) — never commit.
 .wrangler/
+
+# Cloudflare env — real files gitignored, .example templates committed.
+.env.local
+.env.production

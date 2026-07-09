@@ -25,11 +25,15 @@
 		}
 	],
 	// ── Named environments ────────────────────────────────────────────
-	// Deploy with `wrangler deploy --env production`. Add a Custom Domain in the Cloudflare dashboard
-	// (e.g. get.joescreen.com) pointed at the production worker; until then it's on workers.dev.
+	// `wrangler deploy --env production` serves the download site at joescreen.cheffing.dev.
+	// The custom-domain route below makes wrangler create the DNS + route automatically, provided
+	// the cheffing.dev zone is on this Cloudflare account (add it once in the dashboard).
 	"env": {
 		"production": {
 			"name": "joescreen-download",
+			"routes": [
+				{ "pattern": "joescreen.cheffing.dev", "custom_domain": true }
+			],
 			"vars": {
 				"ENVIRONMENT": "production",
 				"DMG_KEY": "JoeScreen.dmg",
