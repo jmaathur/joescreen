@@ -1,0 +1,22 @@
+{
+	"name": "joescreen-download",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"main": "src/index.ts",
+	"description": "Public download site for the JoeScreen macOS app — landing page + /download streaming the notarized .dmg from R2 (Cloudflare Worker, golf-app pattern).",
+	"scripts": {
+		"dev": "wrangler dev --ip 0.0.0.0 --port 3010 --inspector-port 3510",
+		"deploy": "wrangler deploy --env production",
+		"check-types": "tsc --noEmit",
+		"cf-typegen": "wrangler types worker-configuration.d.ts --include-env=false"
+	},
+	"dependencies": {
+		"hono": "^4.7.6"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20250220.0",
+		"typescript": "^5.7.3",
+		"wrangler": "^4.20.5"
+	}
+}

@@ -1,0 +1,42 @@
+name: Production • Cloudflare
+
+# Deploy the joescreen-download worker to production on every merge to main.
+# (Adapted from the golf-app monorepo's cloudflare-deploy-prod pattern, simplified to a single
+# worker + production only.) Only runs when the download app actually changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/joescreen-download/**"
+      - ".github/workflows/cloudflare-deploy-prod.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      # Install from the app dir: this repo mixes Swift-stub workspace packages with this real JS
+      # worker, and bun's root workspace install skips it — the app has its own bun.lock.
+      - name: Install dependencies
+        working-directory: apps/joescreen-download
+        run: bun install --frozen-lockfile
+        timeout-minutes: 5
+
+      - name: Typecheck download worker
+        working-directory: apps/joescreen-download
+        run: bunx tsc --noEmit
+
+      - name: Deploy to Cloudflare (production)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/joescreen-download
+          command: deploy --env production

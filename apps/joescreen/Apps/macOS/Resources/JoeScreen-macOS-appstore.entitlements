@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  JoeScreen macOS — App Store (TestFlight) entitlements.
+
+  Used by the ship scripts for a TestFlight/App Store distribution build. Deliberately MINIMAL: no
+  SharePlay (com.apple.developer.group-session) yet, because that managed capability needs Apple
+  approval and an unapproved restricted entitlement breaks automatic signing (same rule as iOS). Once
+  group-session is approved for com.joescreen.app, add it here.
+
+  App Sandbox is DELIBERATELY omitted (D6): CGEvent input injection needs kTCCServicePostEvent /
+  Accessibility, unavailable to sandboxed apps — this is why the app ships via TestFlight/Developer-ID,
+  NOT the Mac App Store. TestFlight accepts a non-sandboxed app; it only needs the App Store
+  provisioning profile (which the com.apple.application-identifier the profile injects satisfies).
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

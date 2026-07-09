@@ -1,0 +1,46 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "joescreen-download",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-02-19",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	},
+	// Public download site for the JoeScreen macOS app: a landing page + a /download route that
+	// streams the notarized .dmg from R2. No DB/auth. The .dmg lives in the R2 bucket bound as DMG;
+	// upload it with scripts/publish-dmg.sh (wrangler r2 object put).
+	"vars": {
+		"ENVIRONMENT": "development",
+		// Basename of the current dmg object in R2 (also the download filename users get).
+		"DMG_KEY": "JoeScreen.dmg",
+		// Shown on the page; bump when you publish a new build.
+		"APP_VERSION": "0.1.0"
+	},
+	"r2_buckets": [
+		{
+			"binding": "DMG",
+			"bucket_name": "joescreen-downloads",
+			"preview_bucket_name": "joescreen-downloads"
+		}
+	],
+	// ── Named environments ────────────────────────────────────────────
+	// Deploy with `wrangler deploy --env production`. Add a Custom Domain in the Cloudflare dashboard
+	// (e.g. get.joescreen.com) pointed at the production worker; until then it's on workers.dev.
+	"env": {
+		"production": {
+			"name": "joescreen-download",
+			"vars": {
+				"ENVIRONMENT": "production",
+				"DMG_KEY": "JoeScreen.dmg",
+				"APP_VERSION": "0.1.0"
+			},
+			"r2_buckets": [
+				{
+					"binding": "DMG",
+					"bucket_name": "joescreen-downloads"
+				}
+			]
+		}
+	}
+}
