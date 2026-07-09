@@ -16,6 +16,7 @@
 		"build:ipa": "bash scripts/build-ipa.sh",
 		"testflight": "bash scripts/testflight.sh",
 		"testflight:submit": "bash scripts/testflight-submit.sh",
+		"dist:mac": "bash scripts/notarize-mac.sh",
 		"ship:setup": "bash scripts/testflight-setup.sh",
 		"asc:provision": "bash -c 'set -a; . ./.env.testflight; set +a; bun scripts/asc-provision.mjs \"$@\"' --",
 		"asc:create-app": "bash scripts/asc-create-app.sh",
