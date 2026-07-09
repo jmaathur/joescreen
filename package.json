@@ -19,6 +19,7 @@
 		"dist:mac": "bash scripts/notarize-mac.sh",
 		"release": "bash scripts/release.sh",
 		"publish:dmg": "bash scripts/publish-dmg.sh",
+		"secrets:push": "bash scripts/push-github-secrets.sh",
 		"ship:setup": "bash scripts/testflight-setup.sh",
 		"asc:provision": "bash -c 'set -a; . ./.env.testflight; set +a; bun scripts/asc-provision.mjs \"$@\"' --",
 		"asc:create-app": "bash scripts/asc-create-app.sh",
