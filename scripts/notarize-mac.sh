@@ -33,10 +33,13 @@ if [ -z "$DEVID" ]; then
 fi
 echo "✓ signing identity: $DEVID"
 
-# Non-sandboxed distribution uses the -team entitlements (SharePlay group-session + app group).
-# Injection needs no App Sandbox — that's the whole point of Developer-ID over App Store (D6).
+# Use the minimal App-Store entitlements (NOT the -team file): the SharePlay group-session entitlement
+# requires a provisioning profile, which Developer-ID distribution doesn't use (and it's unapproved
+# anyway). Input injection needs NO entitlement — it's gated by kTCCServicePostEvent TCC at runtime,
+# not by an entitlement — so dropping SharePlay costs nothing for the core feature. Non-sandboxed is
+# the point of Developer-ID over App Store (D6).
 export SHIP_IOS_ENTITLEMENTS="iOS/Resources/JoeScreen-iOS-minimal.entitlements"
-export SHIP_MAC_ENTITLEMENTS="macOS/Resources/JoeScreen-macOS-team.entitlements"
+export SHIP_MAC_ENTITLEMENTS="macOS/Resources/JoeScreen-macOS-appstore.entitlements"
 
 echo "── regenerating Xcode project (TEAM_ID=$APPLE_TEAM_ID)"
 ( cd "$APP_DIR" && TEAM_ID="$APPLE_TEAM_ID" xcodegen generate --spec Apps/project.yml >/dev/null )
