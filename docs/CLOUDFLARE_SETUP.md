@@ -24,15 +24,13 @@ Future tools each get their own subdomain (`<tool>.cheffing.dev`) + their own wo
    API token scopes: **Workers Scripts:Edit**, **Account Settings:Read**, **Workers R2 Storage:Edit**
    (create at https://dash.cloudflare.com/profile/api-tokens). `wrangler` reads these from the env.
 
-3. **R2 bucket** for the macOS `.dmg`. R2 is not yet enabled on the account — until it is, the
-   production worker deploys **without** the DMG binding and `/download` returns 404.
+3. **R2 bucket** for the macOS `.dmg` (done 2026-07-10: R2 enabled on the account + bucket created):
    ```sh
-   # 1. Dashboard → R2 → purchase the free plan (one-time enable; needs a billing profile).
-   # 2. Then:
+   # R2 must be enabled once in the dashboard (R2 → purchase the free plan) before this works:
    bunx wrangler r2 bucket create joescreen-downloads
-   # 3. Restore the commented-out "r2_buckets" block under env.production in
-   #    apps/joescreen-download/wrangler.jsonc, redeploy, then `bun run publish:dmg`.
    ```
+   If the bucket/binding is ever missing, the worker still deploys and `/download` returns 404
+   gracefully (the DMG binding is optional in src/index.ts).
 
 4. **GitHub Actions secrets** (for auto-deploy on merge to main):
    Repo → Settings → Secrets and variables → Actions → add `CLOUDFLARE_API_TOKEN` and

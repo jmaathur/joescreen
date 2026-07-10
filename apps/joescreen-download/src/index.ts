@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { landingPage } from "./page";
 
 type Bindings = {
-	// Absent in production until R2 is enabled on the account (see docs/CLOUDFLARE_SETUP.md).
+	// Optional so the worker still deploys (and /download 404s gracefully) if the R2 binding
+	// is ever removed — e.g. R2 disabled on the account (see docs/CLOUDFLARE_SETUP.md).
 	DMG?: R2Bucket;
 	DMG_KEY: string;
 	APP_VERSION: string;

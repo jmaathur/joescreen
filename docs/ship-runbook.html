@@ -101,7 +101,7 @@
     <span class="pill ok">joescreen.cheffing.dev — LIVE</span>
     <span class="pill ok">CI deploys — GREEN</span>
     <span class="pill ok">GitHub secrets — pushed</span>
-    <span class="pill warn">R2 / dmg download — blocked on account enable</span>
+    <span class="pill ok">dmg download — LIVE (R2 enabled 2026-07-10)</span>
     <span class="pill info">Database — none (deliberate)</span>
   </div>
 </header>
@@ -117,8 +117,8 @@
   </tr>
   <tr>
     <td><code>joescreen.cheffing.dev</code></td>
-    <td><code>apps/joescreen-download</code> — landing page + <code>/download</code> streaming the notarized dmg from R2</td>
-    <td>Same CI path. <span class="pill warn">R2 binding disabled until R2 is enabled on the account</span></td>
+    <td><code>apps/joescreen-download</code> — landing page + <code>/download</code> streaming the notarized dmg from R2 (bucket <code>joescreen-downloads</code>)</td>
+    <td>Same CI path; the dmg binary itself ships via <code>bun run publish:dmg</code>, no deploy needed</td>
   </tr>
   <tr>
     <td>iOS beta (TestFlight)</td>
@@ -189,14 +189,14 @@ cd apps/joescreen-download  &amp;&amp; bun run deploy    <span class="c"># joesc
 </ul>
 
 <h2 id="dmg"><span class="step-no">2</span>New macOS build → downloadable at joescreen.cheffing.dev</h2>
-<div class="callout warn">
-  <p><strong>One manual step blocks this today: enable R2 on the Cloudflare account.</strong>
-  The API returns <code>code 10042 — “Please enable R2 through the Cloudflare Dashboard”</code>.
-  Dashboard → R2 → purchase the free plan (needs a billing profile; free tier is genuinely free).
-  Until then the production worker deploys <em>without</em> the DMG binding and <code>/download</code> returns 404 with a friendly message.
-  A notarized <code>JoeScreen.dmg</code> (20&nbsp;MB, built Jul&nbsp;8) is already waiting in <code>apps/joescreen/build/dist-mac/</code>.</p>
-  <p>After enabling R2, in order:</p>
-  <p><code>bunx wrangler r2 bucket create joescreen-downloads</code> → restore the commented-out <code>r2_buckets</code> block under <code>env.production</code> in <code>apps/joescreen-download/wrangler.jsonc</code> → push (CI redeploys) → <code>bun run publish:dmg</code>.</p>
+<div class="callout ok">
+  <p><strong>Fully live since 2026-07-10.</strong> R2 was enabled on the account, the
+  <code>joescreen-downloads</code> bucket created, the <code>DMG</code> binding restored under
+  <code>env.production</code>, and the notarized <code>JoeScreen.dmg</code> (20&nbsp;MB, build of Jul&nbsp;8)
+  published — <code>/download</code> serves it with <code>content-disposition: attachment</code>.
+  If R2 ever gets disabled again, the API failure signature is <code>code 10042 — “Please enable R2
+  through the Cloudflare Dashboard”</code>, and the worker code degrades gracefully (404 on
+  <code>/download</code>) if deployed without the binding.</p>
 </div>
 <ol class="steps">
   <li><code>bun run dist:mac</code> — archives with the <strong>Developer ID Application</strong> cert from the login keychain, packages the dmg, notarizes it (<code>notarytool --wait</code>, same ASC key as TestFlight), staples. <span class="small muted">Interactive: expect one keychain password prompt — click “Always Allow”.</span></li>
@@ -241,7 +241,7 @@ bun run release --no-review   <span class="c"># skips the entire tester-groups +
   <tr><td>GitHub <code>production</code> environment + secrets</td><td><span class="pill ok">done</span></td><td>Pushed 2026-07-10 via <code>bun run secrets:push</code></td></tr>
   <tr><td>CI deploy proven end-to-end</td><td><span class="pill ok">done</span></td><td>Run <code>29119642620</code> (commit <code>b39c325</code>): detect ✓, both workers deployed ✓</td></tr>
   <tr><td>Old cheffing.dev site replaced</td><td><span class="pill ok">done</span></td><td>The previous Next.js/OpenNext site was detached from <code>cheffing.dev</code>/<code>www</code> (both now route to <code>cheffing-hub</code>). The old site is still reachable at <code>preview.cheffing.dev</code>, served by the <code>www-preview</code> worker; <code>www-production</code> still exists but has no domain attached. <strong>Rollback path = <code>www-preview</code> — keep it as long as you might want to roll back.</strong> <code>www-production</code> can be deleted any time; other workers on the account (<code>new-project-*</code>, <code>project-task-*</code>, etc.) look unrelated — check before touching them.</td></tr>
-  <tr><td>R2 enabled on the account</td><td><span class="pill bad">todo</span></td><td>Dashboard → R2 → purchase free plan. Then: bucket create → restore binding → <code>publish:dmg</code> (see section 2)</td></tr>
+  <tr><td>R2 enabled on the account</td><td><span class="pill ok">done</span></td><td>Enabled 2026-07-10; bucket <code>joescreen-downloads</code> created, binding restored, dmg published — <code>/download</code> verified 200 (20,952,040 bytes)</td></tr>
   <tr><td>SharePlay capability approval</td><td><span class="pill warn">pending Apple</span></td><td>Request for both App IDs; ship minimal entitlements meanwhile</td></tr>
   <tr><td>App Group <code>group.com.joescreen.app</code></td><td><span class="pill warn">deferred</span></td><td>Needed only for the future broadcast extension</td></tr>
   <tr><td>Database</td><td><span class="pill info">none — deliberate</span></td><td>Nothing in the stack needs one yet; revisit when a feature does (D1 binding in the relevant worker's <code>wrangler.jsonc</code>)</td></tr>
@@ -311,7 +311,7 @@ set -a; source .env.production; set +a; bunx wrangler whoami</code></pre>
   <li>Deploy workflow gained <code>workflow_dispatch</code> (manual deploy-all), plus deploy-all on <code>bun.lock</code> changes and on pushes with no usable diff base.</li>
   <li>GitHub <code>production</code> environment secrets pushed (they had never been set — the second latent failure).</li>
   <li><code>cheffing.dev</code> + <code>www</code> custom domains detached from the old <code>www-production</code> Next.js worker and attached to <code>cheffing-hub</code>. Old site preserved at <code>preview.cheffing.dev</code>.</li>
-  <li><code>joescreen-download</code> deployed for the first time (DNS for <code>joescreen.cheffing.dev</code> created); its R2 binding is commented out under <code>env.production</code> until R2 is enabled, with <code>/download</code> 404ing gracefully.</li>
+  <li><code>joescreen-download</code> deployed for the first time (DNS for <code>joescreen.cheffing.dev</code> created). Its R2 binding was initially commented out (R2 not enabled on the account, <code>/download</code> 404ing gracefully); later the same day R2 was enabled, the binding restored, and the dmg published — download live.</li>
   <li>Hub links became environment-aware — local dev no longer redirects to production.</li>
 </ul>
 
