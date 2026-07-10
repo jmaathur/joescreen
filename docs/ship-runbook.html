@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JoeScreen ship runbook — cheffing.dev + TestFlight</title>
+<meta name="description" content="How a change to JoeScreen reliably reaches cheffing.dev and TestFlight — verified 2026-07-10." />
+<style>
+  :root {
+    --bg: #ffffff; --text: #1a1a21; --muted: #5c5c66; --border: #e4e4ea;
+    --panel: #f7f7fa; --code-bg: #f1f1f5; --accent: #6a4dff;
+    --ok: #1a7f42; --ok-bg: #e5f5eb; --warn: #9a6700; --warn-bg: #fff3d6;
+    --bad: #c2362f; --bad-bg: #fde8e6; --info: #1a5fb4; --info-bg: #e7f0fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e0e12; --text: #ececf1; --muted: #a1a1ab; --border: #2a2a33;
+      --panel: #17171d; --code-bg: #1e1e26; --accent: #8f7aff;
+      --ok: #4ade80; --ok-bg: #10301c; --warn: #fbbf24; --warn-bg: #33270a;
+      --bad: #f87171; --bad-bg: #3a1512; --info: #7cb2f5; --info-bg: #12233a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 48px 28px 80px; }
+  header { margin-bottom: 8px; }
+  h1 { font-size: 30px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .subtitle { color: var(--muted); font-size: 15px; margin: 0 0 18px; }
+  h2 { font-size: 21px; letter-spacing: -0.01em; margin: 44px 0 12px; padding-top: 18px; border-top: 1px solid var(--border); }
+  h2 .step-no { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 8px; }
+  h3 { font-size: 16px; margin: 22px 0 8px; }
+  p { margin: 10px 0; }
+  a { color: var(--accent); }
+  code, pre {
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+  }
+  code { background: var(--code-bg); border-radius: 5px; padding: 1.5px 5px; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; line-height: 1.5; margin: 12px 0;
+  }
+  pre code { background: none; padding: 0; }
+  pre .c { color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 12px; border: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; }
+  .table-scroll { overflow-x: auto; }
+  .pill {
+    display: inline-block; font-size: 12px; font-weight: 600; border-radius: 999px;
+    padding: 2px 10px; white-space: nowrap;
+  }
+  .pill.ok   { color: var(--ok);   background: var(--ok-bg); }
+  .pill.warn { color: var(--warn); background: var(--warn-bg); }
+  .pill.bad  { color: var(--bad);  background: var(--bad-bg); }
+  .pill.info { color: var(--info); background: var(--info-bg); }
+  .status-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+  .callout {
+    border: 1px solid var(--border); border-left: 4px solid var(--accent);
+    border-radius: 8px; background: var(--panel); padding: 12px 16px; margin: 14px 0;
+    font-size: 14px;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.bad  { border-left-color: var(--bad); }
+  .callout.ok   { border-left-color: var(--ok); }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child { margin-bottom: 0; }
+  ol.steps { padding-left: 22px; }
+  ol.steps > li { margin: 10px 0; }
+  ul { padding-left: 22px; }
+  li { margin: 6px 0; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13px; }
+  footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+  kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; font-size: 12px; background: var(--panel); }
+  @media print {
+    body { background: #fff; color: #000; }
+    .wrap { max-width: none; padding: 0; }
+    pre { white-space: pre-wrap; }
+    h2 { break-after: avoid; }
+  }
+</style>
+</head>
+<body>
+<main class="wrap">
+
+<header>
+  <h1>JoeScreen ship runbook</h1>
+  <p class="subtitle">
+    How a change reliably reaches <strong>cheffing.dev</strong> and <strong>TestFlight</strong>.
+    Every command here was verified against the repo on <strong>July&nbsp;10,&nbsp;2026</strong>.
+    Repo: <code>jmaathur/joescreen</code>, branch <code>main</code>.
+  </p>
+  <div class="status-row">
+    <span class="pill ok">cheffing.dev — LIVE (hub)</span>
+    <span class="pill ok">joescreen.cheffing.dev — LIVE</span>
+    <span class="pill ok">CI deploys — GREEN</span>
+    <span class="pill ok">GitHub secrets — pushed</span>
+    <span class="pill warn">R2 / dmg download — blocked on account enable</span>
+    <span class="pill info">Database — none (deliberate)</span>
+  </div>
+</header>
+
+<h2 id="map"><span class="step-no">0</span>The system at a glance</h2>
+<div class="table-scroll">
+<table>
+  <tr><th>Surface</th><th>What serves it</th><th>How it deploys</th></tr>
+  <tr>
+    <td><code>cheffing.dev</code> + <code>www</code></td>
+    <td><code>apps/cheffing-hub</code> — hub landing page (Hono Worker, no bindings)</td>
+    <td>Push to <code>main</code> → GitHub Actions → <code>wrangler deploy --env production</code></td>
+  </tr>
+  <tr>
+    <td><code>joescreen.cheffing.dev</code></td>
+    <td><code>apps/joescreen-download</code> — landing page + <code>/download</code> streaming the notarized dmg from R2</td>
+    <td>Same CI path. <span class="pill warn">R2 binding disabled until R2 is enabled on the account</span></td>
+  </tr>
+  <tr>
+    <td>iOS beta (TestFlight)</td>
+    <td>Swift app in <code>apps/joescreen</code></td>
+    <td><code>bun run testflight ios</code> from this Mac (headless via ASC API key)</td>
+  </tr>
+  <tr>
+    <td>macOS app</td>
+    <td>Developer-ID notarized dmg — the <em>only</em> channel: Apple rejects the non-sandboxed app from TestFlight (ITMS-90296, proven 2026-07-08); non-sandboxing is deliberate (D6, input injection)</td>
+    <td><code>bun run dist:mac</code> → <code>bun run publish:dmg</code> → R2</td>
+  </tr>
+  <tr>
+    <td>Media plane (calls)</td>
+    <td>LiveKit SFU — <code>apps/livekit</code> (docker-compose + Go token server)</td>
+    <td>Manual; must be publicly reachable before TestFlight testers can actually join a call</td>
+  </tr>
+  <tr>
+    <td>Database</td>
+    <td class="muted">None. Deliberately deferred — the workers are static/stateless. When one is needed, add a D1/KV binding to the app's <code>wrangler.jsonc</code>; the deploy pipeline needs no changes.</td>
+    <td class="muted">—</td>
+  </tr>
+</table>
+</div>
+<p class="small muted">
+  Local dev ports: <code>3010</code> joescreen-download · <code>3020</code> cheffing-hub · <code>7880</code> LiveKit dev SFU.
+  The hub's JoeScreen card links to <code>localhost:3010</code> in dev and <code>joescreen.cheffing.dev</code> only in production (fixed 2026-07-10).
+</p>
+
+<h2 id="web"><span class="step-no">1</span>Web changes → cheffing.dev (the everyday path)</h2>
+<ol class="steps">
+  <li>Edit worker code under <code>apps/cheffing-hub/</code> or <code>apps/joescreen-download/</code>.</li>
+  <li>Sanity-check locally (optional): <code>cd apps/&lt;worker&gt; &amp;&amp; bun run dev</code>, then <code>bunx tsc --noEmit</code>.</li>
+  <li>Commit and <strong>push to <code>main</code></strong>. That's it — CI does the rest.</li>
+  <li>Watch it: <code>gh run watch $(gh run list --workflow cloudflare-deploy-prod.yml --limit 1 --json databaseId -q '.[0].databaseId')</code></li>
+  <li>Verify production:
+<pre><code>curl https://cheffing.dev/version                 <span class="c"># {"env":"production"}</span>
+curl https://joescreen.cheffing.dev/version       <span class="c"># {"version":"…","env":"production"}</span></code></pre>
+  </li>
+</ol>
+
+<h3>What triggers the deploy workflow</h3>
+<p><code>.github/workflows/cloudflare-deploy-prod.yml</code> (“Production • Cloudflare”) runs on pushes to <code>main</code> touching:</p>
+<ul>
+  <li><code>apps/joescreen-download/**</code> or <code>apps/cheffing-hub/**</code> → deploys <em>only the changed worker(s)</em></li>
+  <li><code>bun.lock</code> or the workflow file itself → deploys <em>all</em> workers</li>
+  <li><strong>Manual recovery:</strong> <code>gh workflow run cloudflare-deploy-prod.yml</code> (or the Actions “Run workflow” button) → deploys <em>all</em> workers. Use this after a failed run or a secrets rotation — no dummy commit needed.</li>
+</ul>
+<p class="small muted">First pushes and force-pushes (no usable diff base) also deploy everything rather than silently skipping.</p>
+
+<h3>Manual deploy fallback (bypasses CI)</h3>
+<pre><code><span class="c"># creds: .env.production at repo root (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID)</span>
+set -a; source .env.production; set +a
+cd apps/cheffing-hub        &amp;&amp; bun run deploy    <span class="c"># cheffing.dev + www</span>
+cd apps/joescreen-download  &amp;&amp; bun run deploy    <span class="c"># joescreen.cheffing.dev</span></code></pre>
+<div class="callout bad">
+  <p><strong>Always <code>bun run deploy</code>, never bare <code>wrangler deploy</code>.</strong>
+  Both wrangler configs use the <em>same worker name</em> at the top level and under <code>env.production</code>,
+  so a bare <code>wrangler deploy</code> (no <code>--env production</code>) overwrites the production worker
+  with development vars.</p>
+</div>
+
+<h3>Rules that keep CI green (learned the hard way)</h3>
+<ul>
+  <li><strong>One lockfile.</strong> The workers are bun workspace members; the root <code>bun.lock</code> is the single source of truth and CI installs once from the repo root with <code>--frozen-lockfile</code>. Never create per-app <code>bun.lock</code> files — that split is exactly what broke the first two deploy runs.</li>
+  <li><strong>Adding a dependency:</strong> <code>cd apps/&lt;worker&gt; &amp;&amp; bun add &lt;pkg&gt;</code>, then commit the changed <code>package.json</code> <em>and the root <code>bun.lock</code></em>. Check with <code>bun install --frozen-lockfile</code> at the root before pushing.</li>
+  <li><strong>Keep the directory lowercase <code>apps/</code>.</strong> Git tracks lowercase; the old on-disk <code>Apps/</code> spelling hid the workers from bun's workspace glob on macOS while CI (case-sensitive) saw them — which is how the lockfile drift went unnoticed. (The <em>inner</em> <code>apps/joescreen/Apps/</code> Swift directory is capital-A on purpose — different thing.)</li>
+  <li><strong>Secrets rotation:</strong> update <code>.env.production</code>, run <code>bun run secrets:push</code> (pushes <code>CLOUDFLARE_API_TOKEN</code> + <code>CLOUDFLARE_ACCOUNT_ID</code> as <em>environment</em> secrets into the GitHub <code>production</code> environment), then <code>gh workflow run cloudflare-deploy-prod.yml</code>.</li>
+</ul>
+
+<h2 id="dmg"><span class="step-no">2</span>New macOS build → downloadable at joescreen.cheffing.dev</h2>
+<div class="callout warn">
+  <p><strong>One manual step blocks this today: enable R2 on the Cloudflare account.</strong>
+  The API returns <code>code 10042 — “Please enable R2 through the Cloudflare Dashboard”</code>.
+  Dashboard → R2 → purchase the free plan (needs a billing profile; free tier is genuinely free).
+  Until then the production worker deploys <em>without</em> the DMG binding and <code>/download</code> returns 404 with a friendly message.
+  A notarized <code>JoeScreen.dmg</code> (20&nbsp;MB, built Jul&nbsp;8) is already waiting in <code>apps/joescreen/build/dist-mac/</code>.</p>
+  <p>After enabling R2, in order:</p>
+  <p><code>bunx wrangler r2 bucket create joescreen-downloads</code> → restore the commented-out <code>r2_buckets</code> block under <code>env.production</code> in <code>apps/joescreen-download/wrangler.jsonc</code> → push (CI redeploys) → <code>bun run publish:dmg</code>.</p>
+</div>
+<ol class="steps">
+  <li><code>bun run dist:mac</code> — archives with the <strong>Developer ID Application</strong> cert from the login keychain, packages the dmg, notarizes it (<code>notarytool --wait</code>, same ASC key as TestFlight), staples. <span class="small muted">Interactive: expect one keychain password prompt — click “Always Allow”.</span></li>
+  <li><code>bun run publish:dmg</code> — uploads to <code>r2://joescreen-downloads/JoeScreen.dmg</code>. The live site serves the new binary immediately; clients with a cached copy get it within 5&nbsp;minutes (<code>max-age=300</code>).</li>
+  <li>Bump <code>APP_VERSION</code> in <code>apps/joescreen-download/wrangler.jsonc</code> — <strong>in both places</strong> (top-level <code>vars</code> and <code>env.production.vars</code>) — and push to <code>main</code> so the page shows the new version.</li>
+  <li>Verify: <code>curl -I https://joescreen.cheffing.dev/download</code> (expect 200 + <code>content-disposition: attachment</code>) and <code>curl https://joescreen.cheffing.dev/version</code>.</li>
+</ol>
+<p class="small muted">Steps 2 and 3 are independent: the R2 upload changes what users download; the worker deploy only updates the displayed version.</p>
+
+<h2 id="ios"><span class="step-no">3</span>iOS changes → TestFlight</h2>
+<p>All creds come from <code>.env.testflight</code> at the repo root (<code>APPLE_TEAM_ID</code>, <code>ASC_API_KEY_ID</code>, <code>ASC_API_ISSUER_ID</code>, <code>ASC_API_KEY_PATH</code> → the .p8). Bundle IDs are fixed: iOS <code>com.joescreen.app.ios</code>, macOS <code>com.joescreen.app</code>. ASC app record: “JoeScreen”, id <code>6788803912</code>. First build to pass Apple processing: build 7 (2026-07-08). Public tester link: <a href="https://testflight.apple.com/join/C3AdpdZJ">testflight.apple.com/join/C3AdpdZJ</a>.</p>
+<h3>Steady state (already set up — this is the whole loop)</h3>
+<ol class="steps">
+  <li><code>bun run testflight ios</code> — bumps the build number in <code>apps/joescreen/Apps/project.yml</code>, archives, exports the .ipa, uploads via altool.</li>
+  <li><strong>Commit the bumped <code>project.yml</code></strong> (currently at build 9). TestFlight rejects reused build numbers; an uncommitted bump means the next machine/checkout reuses one and the upload fails.</li>
+  <li>Wait ~5–15&nbsp;min for App Store Connect processing, then <code>bun run testflight:review ios</code> — attaches the build to tester groups and (unless configured off) submits the one-time external Beta App Review (~1&nbsp;day).</li>
+  <li>Upload failed but the build succeeded? Retry just the upload: <code>bun run testflight:submit ios</code> (reuses <code>apps/joescreen/build/last-artifact-ios.txt</code>).</li>
+</ol>
+<h3>Both platforms in one command</h3>
+<pre><code>bun run release          <span class="c"># macOS dmg first (interactive keychain), then iOS → TestFlight, headless</span>
+bun run release --no-review   <span class="c"># skips the entire tester-groups + review step, not just the review</span></code></pre>
+<div class="callout">
+  <p><strong><code>release.sh</code> does not publish the dmg</strong> — <code>bun run publish:dmg</code> and the <code>APP_VERSION</code> bump (section&nbsp;2, steps&nbsp;2–3) are separate follow-ups. Also: the review step inside <code>release.sh</code> is wrapped in <code>|| true</code>, so “iOS ✓ uploaded” in its summary does <em>not</em> prove the review step worked — check that step's own output.</p>
+</div>
+<h3>First-time setup on a new machine / account (already done here)</h3>
+<p><code>bun run ship:setup ios</code> — provisions bundle IDs and app records idempotently, then builds and uploads. <code>--dry-run</code> previews (and skips the app-record step too, not just build+upload).</p>
+<h3>Apple limits the scripts can't automate</h3>
+<ul>
+  <li><strong>App records:</strong> ASC API keys can't <code>POST /v1/apps</code> (403) — the setup script falls back to <code>fastlane produce</code>, which needs <code>APPLE_ID</code> + interactive 2FA once.</li>
+  <li><strong>SharePlay</strong> (<code>com.apple.developer.group-session</code>) is a managed capability needing manual Apple approval — no API. Until approved, ships use <em>minimal</em> entitlements (viewer + voice, no SharePlay); afterwards pass <code>SHIP_ENTITLEMENTS=full</code>.</li>
+  <li><strong>App Groups</strong> have no ASC API — <code>fastlane produce group -g group.com.joescreen.app -n "JoeScreen App Group"</code> or the portal. Only needed for the future ReplayKit broadcast extension; does not block TestFlight.</li>
+  <li><strong>altool</strong> only reads keys from fixed dirs — the submit script stages the .p8 to <code>~/.appstoreconnect/private_keys/AuthKey_&lt;KEYID&gt;.p8</code>, and <em>only if that file is absent</em>: it never refreshes an existing copy, so if a staged key ever goes bad, delete it there and re-run.</li>
+  <li><strong>Testers need a reachable SFU:</strong> a TestFlight build pointed at <code>localhost</code> can't join calls. Deploy the <code>apps/livekit</code> docker-compose stack behind a public domain + TLS, or use <code>bun run tunnel:testflight</code> for an ephemeral smoke test from this Mac.</li>
+</ul>
+
+<h2 id="setup"><span class="step-no">4</span>One-time account state (as of 2026-07-10)</h2>
+<div class="table-scroll">
+<table>
+  <tr><th>Item</th><th>Status</th><th>Detail</th></tr>
+  <tr><td>cheffing.dev zone on Cloudflare</td><td><span class="pill ok">done</span></td><td>Active on “Cheffingdev@gmail.com's Account” (<code>0b1f31c1…</code>)</td></tr>
+  <tr><td>Local creds (<code>.env.production</code>, <code>.env.local</code>)</td><td><span class="pill ok">done</span></td><td><code>wrangler whoami</code> authenticates via the API token</td></tr>
+  <tr><td>GitHub <code>production</code> environment + secrets</td><td><span class="pill ok">done</span></td><td>Pushed 2026-07-10 via <code>bun run secrets:push</code></td></tr>
+  <tr><td>CI deploy proven end-to-end</td><td><span class="pill ok">done</span></td><td>Run <code>29119642620</code> (commit <code>b39c325</code>): detect ✓, both workers deployed ✓</td></tr>
+  <tr><td>Old cheffing.dev site replaced</td><td><span class="pill ok">done</span></td><td>The previous Next.js/OpenNext site was detached from <code>cheffing.dev</code>/<code>www</code> (both now route to <code>cheffing-hub</code>). The old site is still reachable at <code>preview.cheffing.dev</code>, served by the <code>www-preview</code> worker; <code>www-production</code> still exists but has no domain attached. <strong>Rollback path = <code>www-preview</code> — keep it as long as you might want to roll back.</strong> <code>www-production</code> can be deleted any time; other workers on the account (<code>new-project-*</code>, <code>project-task-*</code>, etc.) look unrelated — check before touching them.</td></tr>
+  <tr><td>R2 enabled on the account</td><td><span class="pill bad">todo</span></td><td>Dashboard → R2 → purchase free plan. Then: bucket create → restore binding → <code>publish:dmg</code> (see section 2)</td></tr>
+  <tr><td>SharePlay capability approval</td><td><span class="pill warn">pending Apple</span></td><td>Request for both App IDs; ship minimal entitlements meanwhile</td></tr>
+  <tr><td>App Group <code>group.com.joescreen.app</code></td><td><span class="pill warn">deferred</span></td><td>Needed only for the future broadcast extension</td></tr>
+  <tr><td>Database</td><td><span class="pill info">none — deliberate</span></td><td>Nothing in the stack needs one yet; revisit when a feature does (D1 binding in the relevant worker's <code>wrangler.jsonc</code>)</td></tr>
+</table>
+</div>
+
+<h2 id="verify"><span class="step-no">5</span>Health checks &amp; troubleshooting</h2>
+<h3>60-second health check</h3>
+<pre><code>curl https://cheffing.dev/version                 <span class="c"># {"env":"production"}</span>
+curl https://joescreen.cheffing.dev/version       <span class="c"># {"version":"0.1.0","env":"production"}</span>
+gh run list --workflow cloudflare-deploy-prod.yml --limit 3
+gh secret list --env production                   <span class="c"># CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID</span>
+set -a; source .env.production; set +a; bunx wrangler whoami</code></pre>
+<h3>When something breaks</h3>
+<div class="table-scroll">
+<table>
+  <tr><th>Symptom</th><th>Cause &amp; fix</th></tr>
+  <tr>
+    <td><code>error: lockfile had changes, but lockfile is frozen</code> in CI</td>
+    <td>Root <code>bun.lock</code> is out of sync with a workspace <code>package.json</code>. Run <code>bun install</code> at the repo root, commit <code>bun.lock</code>. If a per-app <code>bun.lock</code> has reappeared, delete it.</td>
+  </tr>
+  <tr>
+    <td>Deploy step fails with auth errors</td>
+    <td>Secrets missing/rotated in the GitHub <code>production</code> environment → <code>bun run secrets:push</code>, then re-run via <code>gh workflow run cloudflare-deploy-prod.yml</code>.</td>
+  </tr>
+  <tr>
+    <td><code>wrangler</code>: custom domain “already attached to another script”</td>
+    <td>Another worker owns the hostname. List: <code>GET /accounts/$ID/workers/domains</code>; detach: <code>DELETE /accounts/$ID/workers/domains/&lt;domain-id&gt;</code> (both with <code>Authorization: Bearer $CLOUDFLARE_API_TOKEN</code>), then redeploy.</td>
+  </tr>
+  <tr>
+    <td>New subdomain doesn't resolve locally right after deploy</td>
+    <td>Negative DNS cache. Check reality with <code>dig @1.1.1.1 &lt;host&gt;</code>; your resolver catches up within minutes.</td>
+  </tr>
+  <tr>
+    <td>R2 commands fail with <code>code: 10042</code></td>
+    <td>R2 not enabled on the account — dashboard step, see section 2.</td>
+  </tr>
+  <tr>
+    <td>altool: “Cannot determine the Apple ID from Bundle ID”</td>
+    <td>No ASC app record for that bundle ID yet. <code>bun run ship:setup ios</code> (or create in ASC → Apps → New App), wait ~2 min, re-run <code>bun run testflight:submit ios</code>.</td>
+  </tr>
+  <tr>
+    <td>TestFlight upload rejected: build number already used</td>
+    <td>Someone forgot to commit the bumped <code>apps/joescreen/Apps/project.yml</code>. Re-run <code>bun run testflight ios</code> (it bumps again) and commit this time.</td>
+  </tr>
+  <tr>
+    <td>Upload succeeded but the build turns <code>INVALID</code> in ASC (rejection email)</td>
+    <td>Apple's post-upload static analysis — it never fails locally, so always check processing state, not just the upload. Past hits: missing <code>NSCameraUsageDescription</code>/mic strings (LiveKit references the APIs even though the viewer never films — ITMS-90683), icon with alpha, missing iPad orientations, and the macOS sandbox rejection (ITMS-90296, see stale-docs note).</td>
+  </tr>
+  <tr>
+    <td>Local hub links send you to production</td>
+    <td>Fixed 2026-07-10 (<code>devHref</code> in <code>apps/cheffing-hub/src/page.ts</code>). If it recurs for a new tool card, give the card a <code>devHref</code>.</td>
+  </tr>
+</table>
+</div>
+
+<h3>Stale docs — don't trust these spots</h3>
+<ul class="small">
+  <li>Root <code>README.md</code> says the media plane lives in <code>infra/</code> — it's actually <code>apps/livekit/</code>.</li>
+  <li><code>apps/joescreen-download/README.md</code> mentions <code>workers.dev</code> URLs and <code>get.joescreen.com</code> — superseded by the <code>joescreen.cheffing.dev</code> custom domain in <code>wrangler.jsonc</code>.</li>
+  <li><code>docs/SHIPPING_TESTFLIGHT.md</code> claims the non-sandboxed macOS app can still ship to TestFlight ("App Sandbox is not required for TestFlight") — <strong>disproven empirically on 2026-07-08</strong>: Apple's post-upload validation rejects it with ITMS-90296 ("App sandbox not enabled"). <code>scripts/release.sh</code>'s header has it right. The <code>bun run testflight mac</code> tooling exists but is a dead end for this app; macOS ships as the Developer-ID dmg only.</li>
+</ul>
+
+<h2 id="changelog"><span class="step-no">6</span>What changed on 2026-07-10 (why deploys work now)</h2>
+<ul>
+  <li><strong>Root cause of the failed deploys:</strong> the on-disk <code>Apps/</code> capitalization hid the workers from bun's <code>apps/*</code> workspace glob on macOS, so the root <code>bun.lock</code> never learned about them, while the case-sensitive CI runner treated them as workspace members — <code>bun install --frozen-lockfile</code> died on every run. Fixed in commit <code>b39c325</code>: directory normalized to <code>apps/</code>, per-app lockfiles removed, root lockfile regenerated, CI installs once from the root.</li>
+  <li>Deploy workflow gained <code>workflow_dispatch</code> (manual deploy-all), plus deploy-all on <code>bun.lock</code> changes and on pushes with no usable diff base.</li>
+  <li>GitHub <code>production</code> environment secrets pushed (they had never been set — the second latent failure).</li>
+  <li><code>cheffing.dev</code> + <code>www</code> custom domains detached from the old <code>www-production</code> Next.js worker and attached to <code>cheffing-hub</code>. Old site preserved at <code>preview.cheffing.dev</code>.</li>
+  <li><code>joescreen-download</code> deployed for the first time (DNS for <code>joescreen.cheffing.dev</code> created); its R2 binding is commented out under <code>env.production</code> until R2 is enabled, with <code>/download</code> 404ing gracefully.</li>
+  <li>Hub links became environment-aware — local dev no longer redirects to production.</li>
+</ul>
+
+<footer>
+  <p>Source of truth beats this document: <code>.github/workflows/cloudflare-deploy-prod.yml</code>, <code>docs/CLOUDFLARE_SETUP.md</code>, <code>docs/SHIPPING_TESTFLIGHT.md</code>, <code>TESTING.md</code>, and the scripts in <code>scripts/</code>. If they disagree with this page, update this page (<code>docs/ship-runbook.html</code>).</p>
+  <p>Open locally: <code>open docs/ship-runbook.html</code></p>
+</footer>
+
+</main>
+</body>
+</html>
