@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { landingPage } from "./page";
 
 type Bindings = {
-	DMG: R2Bucket;
+	// Absent in production until R2 is enabled on the account (see docs/CLOUDFLARE_SETUP.md).
+	DMG?: R2Bucket;
 	DMG_KEY: string;
 	APP_VERSION: string;
 	ENVIRONMENT: string;
@@ -18,7 +19,7 @@ app.get("/", (c) => {
 // Stream the notarized .dmg from R2. HEAD is supported so the page can show the size.
 app.on(["GET", "HEAD"], "/download", async (c) => {
 	const key = c.env.DMG_KEY || "JoeScreen.dmg";
-	const object = await c.env.DMG.get(key);
+	const object = c.env.DMG ? await c.env.DMG.get(key) : null;
 	if (!object) {
 		return c.text("Download not available yet — no build has been published.", 404);
 	}

@@ -3,6 +3,7 @@ type Tool = {
 	name: string;
 	blurb: string;
 	href: string;
+	devHref?: string; // where the tool runs under `bun run dev` — used outside production
 	badge: string; // e.g. "macOS", "coming soon"
 	initial: string;
 	live: boolean;
@@ -13,6 +14,7 @@ const TOOLS: Tool[] = [
 		name: "JoeScreen",
 		blurb: "Share individual app windows over a live call — real, movable windows with cursors and voice.",
 		href: "https://joescreen.cheffing.dev",
+		devHref: "http://localhost:3010", // joescreen-download's wrangler dev port
 		badge: "macOS",
 		initial: "J",
 		live: true,
@@ -28,10 +30,11 @@ const TOOLS: Tool[] = [
 	},
 ];
 
-export function hubPage(): string {
+export function hubPage(env: string): string {
+	const isProd = env === "production";
 	const cards = TOOLS.map((t) => {
 		const tag = t.live ? "a" : "div";
-		const href = t.live ? ` href="${t.href}"` : "";
+		const href = t.live ? ` href="${(!isProd && t.devHref) || t.href}"` : "";
 		return `<${tag} class="card${t.live ? "" : " soon"}"${href}>
       <div class="badge-icon">${t.initial}</div>
       <div class="card-body">

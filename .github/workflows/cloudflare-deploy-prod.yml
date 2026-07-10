@@ -9,7 +9,10 @@ on:
     paths:
       - "apps/joescreen-download/**"
       - "apps/cheffing-hub/**"
+      - "bun.lock"
       - ".github/workflows/cloudflare-deploy-prod.yml"
+  # Manual runs deploy every worker — the recovery path when a push-triggered run failed.
+  workflow_dispatch:
 
 jobs:
   detect:
@@ -24,13 +27,20 @@ jobs:
         id: changed
         run: |
           # Worker apps = apps/* dirs that have a wrangler.jsonc.
-          RANGE=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} || true)
-          CHANGED=$(echo "$RANGE" | grep -E '^apps/' | cut -d/ -f1-2 | sort -u | while read d; do
-            [ -f "$d/wrangler.jsonc" ] && basename "$d" || true
-          done | jq -R -s -c 'split("\n") | map(select(length>0))')
-          # If the workflow itself changed, deploy all workers.
-          if echo "$RANGE" | grep -q '.github/workflows/cloudflare-deploy-prod.yml'; then
-            CHANGED=$(find apps -maxdepth 2 -name wrangler.jsonc | xargs -n1 dirname | xargs -n1 basename | jq -R -s -c 'split("\n") | map(select(length>0))')
+          ALL=$(find apps -maxdepth 2 -name wrangler.jsonc | xargs -n1 dirname | xargs -n1 basename | jq -R -s -c 'split("\n") | map(select(length>0))')
+          BEFORE="${{ github.event.before }}"
+          # Manual runs, first pushes, and force pushes (no usable diff base) deploy everything.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            CHANGED="$ALL"
+          else
+            RANGE=$(git diff --name-only "$BEFORE" ${{ github.sha }} || true)
+            CHANGED=$(echo "$RANGE" | grep -E '^apps/' | cut -d/ -f1-2 | sort -u | while read d; do
+              [ -f "$d/wrangler.jsonc" ] && basename "$d" || true
+            done | jq -R -s -c 'split("\n") | map(select(length>0))')
+            # If the workflow itself or the shared lockfile changed, deploy all workers.
+            if echo "$RANGE" | grep -qE '^(\.github/workflows/cloudflare-deploy-prod\.yml|bun\.lock)$'; then
+              CHANGED="$ALL"
+            fi
           fi
           echo "workers=$CHANGED" >> "$GITHUB_OUTPUT"
           echo "changed workers: $CHANGED"
@@ -49,10 +59,9 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
-      # Install from the app dir: this repo mixes Swift-stub workspace packages with JS workers, and
-      # bun's root workspace install skips them — each worker has its own bun.lock.
+      # The workers are bun workspace members: install once from the repo root against the root
+      # bun.lock (single hoisted node_modules — see bunfig.toml).
       - name: Install dependencies
-        working-directory: apps/${{ matrix.worker }}
         run: bun install --frozen-lockfile
         timeout-minutes: 5
       - name: Typecheck

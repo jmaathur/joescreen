@@ -38,13 +38,16 @@
 				"ENVIRONMENT": "production",
 				"DMG_KEY": "JoeScreen.dmg",
 				"APP_VERSION": "0.1.0"
-			},
-			"r2_buckets": [
-				{
-					"binding": "DMG",
-					"bucket_name": "joescreen-downloads"
-				}
-			]
+			}
+			// R2 is not yet enabled on the Cloudflare account, so production deploys without the DMG
+			// binding and /download returns 404. Once R2 is enabled in the dashboard (R2 → purchase the
+			// free plan) and `bunx wrangler r2 bucket create joescreen-downloads` has run, restore:
+			// "r2_buckets": [
+			// 	{
+			// 		"binding": "DMG",
+			// 		"bucket_name": "joescreen-downloads"
+			// 	}
+			// ]
 		}
 	}
 }

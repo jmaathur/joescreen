@@ -5,7 +5,7 @@ type Bindings = { ENVIRONMENT: string };
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-app.get("/", (c) => c.html(hubPage()));
+app.get("/", (c) => c.html(hubPage(c.env.ENVIRONMENT)));
 app.get("/version", (c) => c.json({ env: c.env.ENVIRONMENT }));
 
 export default app;
