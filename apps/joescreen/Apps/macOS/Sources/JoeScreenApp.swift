@@ -7,8 +7,14 @@ import JoeScreenKit
 ///     `open -n JoeScreen.app --args --join-url …` joins with zero clicks (the demo path),
 ///   • `joescreen://join?…` deep links — handled via `.onOpenURL`,
 ///   • the join sheet — presented when no direct-join was requested.
+/// Keeps the app resident when all windows close (backlog #5) so the menu-bar item stays alive.
+final class JoeScreenAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+}
+
 @main
 struct JoeScreenApp: App {
+    @NSApplicationDelegateAdaptor(JoeScreenAppDelegate.self) private var appDelegate
     @State private var model: AppModel
 
     init() {
@@ -65,6 +71,49 @@ struct JoeScreenApp: App {
         .commands {
             SharedWindowsCommands(model: model)
         }
+
+        // Menu-bar residency (backlog #5): quick controls + Recent list even with no window open.
+        MenuBarExtra("JoeScreen", systemImage: "person.2.wave.2.fill") {
+            JoeScreenMenu(model: model)
+        }
+    }
+}
+
+/// The menu-bar menu (backlog #5): mic toggle, share, copy invite link, recents, leave. Teardown
+/// (leave) still runs from here so a menu-bar-only session can be ended cleanly.
+struct JoeScreenMenu: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        if model.phase == .inCall {
+            Button(model.micEnabled ? "Mute Mic" : "Unmute Mic") { model.toggleMic() }
+            Button("Share…") { model.beginShare() }
+            if let invite = model.inviteURL {
+                Button("Copy Invite Link") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(invite.absoluteString, forType: .string)
+                }
+            }
+            Divider()
+            Button("Leave Session") { model.leave() }
+        } else {
+            Text("Not in a session").foregroundStyle(.secondary)
+            if !model.recents.entries.isEmpty {
+                Divider()
+                Menu("Recent") {
+                    ForEach(model.recents.entries, id: \.key) { entry in
+                        Button(recentLabel(entry)) { model.joinRecent(entry) }
+                    }
+                }
+            }
+        }
+        Divider()
+        Button("Quit JoeScreen") { NSApplication.shared.terminate(nil) }
+    }
+
+    private func recentLabel(_ entry: RecentsStore.Entry) -> String {
+        let host = URL(string: entry.serverURL)?.host ?? entry.serverURL
+        return "\(entry.room) · \(host)"
     }
 }
 

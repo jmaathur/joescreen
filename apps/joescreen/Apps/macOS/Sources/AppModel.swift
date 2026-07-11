@@ -171,8 +171,40 @@ public final class AppModel {
         localParticipantID = params.participantID
         showJoinSheet = false
         phase = .connecting
+        recordRecent(params) // menu-bar "Recent" list (backlog #5)
         Task { await connect(params) }
     }
+
+    // MARK: - Recents (backlog #5)
+
+    private static let recentsKey = "JoeScreen.recents"
+
+    /// The persisted recent-sessions list (most-recent-first). Drives the menu-bar "Recent" submenu.
+    public private(set) var recents: RecentsStore = AppModel.loadRecents()
+
+    private static func loadRecents() -> RecentsStore {
+        guard let data = UserDefaults.standard.data(forKey: recentsKey),
+              let store = try? JSONDecoder().decode(RecentsStore.self, from: data) else { return RecentsStore() }
+        return store
+    }
+
+    private func recordRecent(_ params: DirectJoinParameters) {
+        recents.record(RecentsStore.Entry(
+            serverURL: params.serverURL.absoluteString, room: params.room, displayName: params.displayName))
+        if let data = try? JSONEncoder().encode(recents) {
+            UserDefaults.standard.set(data, forKey: Self.recentsKey)
+        }
+    }
+
+    /// Re-join a recent session (menu-bar). Mints a fresh identity per the identity rule.
+    public func joinRecent(_ entry: RecentsStore.Entry) {
+        guard let url = URL(string: entry.serverURL) else { return }
+        requestJoin(DirectJoinParameters(serverURL: url, room: entry.room, displayName: entry.displayName))
+    }
+
+    /// A shareable `joescreen://` invite link for the current (or a given) session, for the menu-bar
+    /// "Copy invite link". Identity omitted (fresh per joiner — the identity rule).
+    public var inviteURL: URL? { joinParameters?.shareableURL() }
 
     public func leave() {
         Task { await teardown() }
