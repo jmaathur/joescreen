@@ -862,7 +862,7 @@ public final class AppModel {
                     switch event {
                     case .paused: self?.setLocalPause(windowID, .paused)
                     case .resumed: self?.setLocalPause(windowID, .live)
-                    case .minimizedShouldUnshare: self?.unshare(windowID)
+                    case .ended: self?.unshare(windowID)
                     case .stopped: self?.unshare(windowID)
                     case .resized(let w, let h): self?.updateShareDimensions(windowID, pixelWidth: w, pixelHeight: h)
                     case .frame: break

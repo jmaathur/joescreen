@@ -20,29 +20,15 @@ import CoreVideo
 /// Runtime-only (needs Screen Recording TCC); the pure classification it drives (`PauseDetector`) is
 /// unit-tested separately. This service is exercised by the M3 capture smoke run + the M4 demo.
 @available(macOS 14.0, *)
-public actor WindowCaptureService: NSObject {
+public actor WindowCaptureService: NSObject, ShareCaptureService {
 
-    /// Events surfaced to the caller (the app/transport orchestrator).
-    public enum Event: Sendable {
-        /// A `.complete` frame was captured and forwarded to the sink.
-        case frame(count: Int)
-        /// The capture pipeline paused (window off-Space / suspended) — NOT a disconnect (R13).
-        case paused
-        /// The capture pipeline resumed delivering complete frames.
-        case resumed
-        /// The window was minimized ⇒ the share should end (R13).
-        case minimizedShouldUnshare
-        /// The source window settled at a new PIXEL size after a resize (post-stabilizer); the
-        /// SCStream was reconfigured to match. The app re-broadcasts these dimensions in ShareInfo so
-        /// receivers re-aspect their viewer window. (M9)
-        case resized(pixelWidth: Int, pixelHeight: Int)
-        /// The stream stopped with an error (SCStreamDelegate.didStopWithError).
-        case stopped(reason: String)
-    }
+    /// Events surfaced to the caller (the app/transport orchestrator). Shared vocabulary with the
+    /// display-capture service via `ShareCaptureEvent` (M11).
+    public typealias Event = ShareCaptureEvent
 
-    private let windowID: WindowID
+    public nonisolated let windowID: WindowID
     private var stream: SCStream?
-    private var output: FrameOutput?
+    private var output: CaptureFrameOutput?
     private var pauseDetector = PauseDetector()
     private var completeFrameCount = 0
     private var eventContinuation: AsyncStream<Event>.Continuation?
@@ -136,7 +122,7 @@ public actor WindowCaptureService: NSObject {
             sourcePixelWidth: config.width,
             sourcePixelHeight: config.height)
 
-        let output = FrameOutput { [weak self] box, status in
+        let output = CaptureFrameOutput { [weak self] box, status in
             // `box` is a CMSampleBufferBox (Sendable) built ON the capture queue before crossing into
             // the actor — the raw non-Sendable CMSampleBuffer never crosses isolation directly (R33
             // convention: the buffer is transferred, never shared).
@@ -144,10 +130,10 @@ public actor WindowCaptureService: NSObject {
         }
         self.output = output
 
-        let stream = SCStream(filter: filter, configuration: config, delegate: StreamDelegate { [weak self] reason in
+        let stream = SCStream(filter: filter, configuration: config, delegate: CaptureStreamDelegate { [weak self] reason in
             Task { await self?.handleStopped(reason: reason) }
         })
-        try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: FrameOutput.queue)
+        try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: CaptureFrameOutput.queue)
         self.stream = stream
 
         try await stream.startCapture()
@@ -266,7 +252,7 @@ public actor WindowCaptureService: NSObject {
     }
 
     private func handleMinimized() {
-        emit(.minimizedShouldUnshare)
+        emit(.ended(reason: "minimized"))
     }
 
     private func handleStopped(reason: String) {
@@ -277,55 +263,7 @@ public actor WindowCaptureService: NSObject {
         eventContinuation?.yield(event)
     }
 }
-
-// MARK: - SCStreamOutput bridge
-
-/// Bridges `SCStreamOutput.didOutputSampleBuffer` to a closure, extracting the `SCFrameStatus` from
-/// the sample buffer's attachments (verified attachment key `SCStreamFrameInfoStatus`).
-@available(macOS 14.0, *)
-private final class FrameOutput: NSObject, SCStreamOutput {
-    static let queue = DispatchQueue(label: "com.joescreen.capture.frames", qos: .userInteractive)
-    private let onSample: @Sendable (CMSampleBufferBox, FrameStatus) -> Void
-
-    init(onSample: @escaping @Sendable (CMSampleBufferBox, FrameStatus) -> Void) {
-        self.onSample = onSample
-    }
-
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen else { return }
-        let status = FrameOutput.status(of: sampleBuffer)
-        // Box the (non-Sendable) buffer on THIS queue so only the Sendable box crosses into the actor.
-        onSample(CMSampleBufferBox(sampleBuffer), status)
-    }
-
-    /// Read the frame status from the buffer's attachments; map the SC enum to our testable enum.
-    static func status(of sampleBuffer: CMSampleBuffer) -> FrameStatus {
-        guard let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
-                as? [[SCStreamFrameInfo: Any]],
-              let attachments = attachmentsArray.first,
-              let rawStatus = attachments[.status] as? Int,
-              let scStatus = SCFrameStatus(rawValue: rawStatus) else {
-            // No status attachment: treat as complete if it carries an image, else idle.
-            return CMSampleBufferGetImageBuffer(sampleBuffer) != nil ? .complete : .idle
-        }
-        switch scStatus {
-        case .complete, .started: return .complete
-        case .idle:               return .idle
-        case .blank:              return .blank
-        case .suspended, .stopped: return .suspended
-        @unknown default:         return .idle
-        }
-    }
-}
-
-/// Bridges `SCStreamDelegate.didStopWithError` to a closure.
-@available(macOS 14.0, *)
-private final class StreamDelegate: NSObject, SCStreamDelegate {
-    private let onStop: @Sendable (String) -> Void
-    init(onStop: @escaping @Sendable (String) -> Void) { self.onStop = onStop }
-    func stream(_ stream: SCStream, didStopWithError error: Error) {
-        onStop(String(describing: error))
-    }
-}
+// The SCStream output + delegate bridges now live in CaptureStreamBridge.swift (shared with
+// DisplayCaptureService, M11).
 
 #endif
