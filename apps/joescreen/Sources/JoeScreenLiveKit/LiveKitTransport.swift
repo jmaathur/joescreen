@@ -105,6 +105,12 @@ public actor LiveKitTransport: MediaTransport {
     /// context; the app updates window count on share/unshare.
     private var codecSelector = CodecSelector(windowCount: 1)
 
+    /// Admitted target bitrate (bps) per window, set by the app before publish (M11). Applied via
+    /// `VideoPublishOptions.screenShareEncoding` when the track publishes. Nil = SDK default.
+    private var shareBitrates: [WindowID: Double] = [:]
+    /// The windowID currently being published, so `makeVideoPublishOptions` can look up its bitrate.
+    private var publishingWindowID: WindowID?
+
     // MARK: - Init
 
     /// - Parameter room: injectable for tests (two Rooms in one process). Defaults to a fresh Room.
@@ -280,6 +286,8 @@ public actor LiveKitTransport: MediaTransport {
         for ch in dataChannels.values { ch.finish() }
         dataChannels.removeAll()
         publishedTracks.removeAll()
+        shareBitrates.removeAll()
+        publishingWindowID = nil
         cameraPublication = nil
         remoteVideoTracks.removeAll()
         reportedGone.removeAll()
@@ -348,6 +356,8 @@ public actor LiveKitTransport: MediaTransport {
     private func completePublish(windowID: WindowID, track: LocalVideoTrack) async {
         // The share may have been unpublished during the wait; bail if so.
         guard publishedTracks[windowID]?.track === track else { return }
+        publishingWindowID = windowID
+        defer { publishingWindowID = nil }
         let options = makeVideoPublishOptions()
         do {
             let publication = try await room.localParticipant.publish(videoTrack: track, options: options)
@@ -361,6 +371,7 @@ public actor LiveKitTransport: MediaTransport {
     }
 
     public func unpublishVideoTrack(for windowID: WindowID) async {
+        shareBitrates[windowID] = nil
         guard let entry = publishedTracks[windowID] else { return }
         publishedTracks[windowID] = nil
         if let publication = entry.publication {
@@ -494,15 +505,27 @@ public actor LiveKitTransport: MediaTransport {
         codecSelector = CodecSelector(windowCount: windowCount, wholeDisplay: wholeDisplay)
     }
 
+    /// Set the admitted target bitrate (bps) for a window's share track (M11). Applied via
+    /// `screenShareEncoding` at publish; a nil/absent value uses the SDK default.
+    public func setShareBitrate(windowID: WindowID, bps: Double?) {
+        shareBitrates[windowID] = bps
+    }
+
     private func makeVideoPublishOptions() -> VideoPublishOptions {
         // VP9 IS requestable (§3); contentHint is unreachable at 2.15.1 (R31) — source:.screenShareVideo
         // on the track is the closest lever, already set at track creation.
         let preferred: LiveKit.VideoCodec = codecSelector.current == .vp9 ? .vp9 : .h264
+        // Admitted bitrate → screenShareEncoding (verified: the 2.15.1 SDK applies screenShareEncoding
+        // to .screenShareVideo tracks). Nil when we have no admitted value (SDK default).
+        var encoding: VideoEncoding?
+        if let windowID = publishingWindowID, let bps = shareBitrates[windowID], bps > 0 {
+            encoding = VideoEncoding(maxBitrate: Int(bps), maxFps: 30)
+        }
         return VideoPublishOptions(
             name: nil,
             encoding: nil,
-            screenShareEncoding: nil,
-            simulcast: false,                       // single window: no simulcast (D5)
+            screenShareEncoding: encoding,
+            simulcast: false,                       // share tracks: no simulcast (D5)
             simulcastLayers: [],
             screenShareSimulcastLayers: [],
             preferredCodec: preferred,

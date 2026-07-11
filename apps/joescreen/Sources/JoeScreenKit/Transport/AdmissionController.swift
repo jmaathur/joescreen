@@ -73,6 +73,28 @@ public struct AdmissionController: Sendable {
         peerCount: Int,
         topology: Topology
     ) -> ShareDecision {
+        // The homogeneous case delegates to the heterogeneous overload (all existing windows share
+        // `existingBitrate`), so both paths use one implementation and all existing tests still hold.
+        admitShare(
+            existingBitrates: Array(repeating: existingBitrate, count: max(0, currentWindowCount)),
+            requestedBitrate: requestedBitrate,
+            measuredUplinkBps: measuredUplinkBps,
+            peerCount: peerCount,
+            topology: topology)
+    }
+
+    /// Heterogeneous admission (M11): existing shares may each have a DIFFERENT bitrate (a window at
+    /// 2.5 Mbps + a 5K display at 3.9 Mbps). Degrade is a UNIFORM scale-down of every share to a
+    /// common per-window bitrate that fits, floored, else refuse. `currentWindowCount` derives from
+    /// `existingBitrates.count`.
+    public func admitShare(
+        existingBitrates: [Double],
+        requestedBitrate: Double,
+        measuredUplinkBps: Double,
+        peerCount: Int,
+        topology: Topology
+    ) -> ShareDecision {
+        let currentWindowCount = existingBitrates.count
         // Host encode cap first — a hard structural limit independent of bandwidth.
         if currentWindowCount + 1 > config.maxEncodeSessions {
             return .refuseAtCapacity(reason: .encodeSessionCap(max: config.maxEncodeSessions))
@@ -82,13 +104,13 @@ public struct AdmissionController: Sendable {
         let budget = measuredUplinkBps * config.uplinkSafetyFraction
         let newCount = currentWindowCount + 1
 
-        // Best case: everyone stays at their bitrate. Total = copies × (existing×N + requested).
-        let fullCost = copies * (existingBitrate * Double(currentWindowCount) + requestedBitrate)
+        // Best case: every existing share keeps its (possibly distinct) bitrate + the requested one.
+        let fullCost = copies * (existingBitrates.reduce(0, +) + requestedBitrate)
         if fullCost <= budget {
             return .admit(bitrate: requestedBitrate)
         }
 
-        // Degrade: find the uniform per-window bitrate that fits, clamped to the floor.
+        // Degrade: find the UNIFORM per-window bitrate that fits, clamped to the floor.
         // budget = copies × perWindow × newCount  ⇒  perWindow = budget / (copies × newCount).
         let perWindow = budget / (copies * Double(newCount))
         if perWindow >= config.minPerWindowBitrate {

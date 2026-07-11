@@ -91,6 +91,18 @@ public final class AppModel {
     /// The structural share context this host publishes (D5). Updated to include a PENDING share
     /// BEFORE publishing it, so the new track gets the right codec (the ordering fix, latent #3).
     private var shareContext = ShareContext()
+    /// Admitted target bitrate (bps) per local share, for uplink admission (M11).
+    private var localShareBitrates: [WindowID: Double] = [:]
+
+    /// Admission controller (M11 — revives dead code #4). Config reconciliation: the TYPE default for
+    /// maxEncodeSessions stays 1 (conservative base-chip) pending the Phase-0(f) hardware
+    /// measurement; the call-site override to 3 reflects that a base Apple-Silicon Mac sustains a few
+    /// low-latency encode sessions (window + display mixes). uplink is ASSUMED 20 Mbps until measured.
+    private let admission = AdmissionController(config: .init(maxEncodeSessions: 3))
+    /// ASSUMED measured uplink (bps) until Phase-0(f) — labeled so it's obvious it's a placeholder.
+    private static let assumedUplinkBps: Double = 20_000_000
+    /// Whether a share was refused by admission (drives a visible alert in the UI).
+    public private(set) var shareRefusedReason: String?
 
     // MARK: - Collaborators
 
@@ -252,7 +264,9 @@ public final class AppModel {
         }
         localCaptures.removeAll()
         localShareKinds.removeAll()
+        localShareBitrates.removeAll()
         shareContext = ShareContext()
+        shareRefusedReason = nil
         await transport.disconnect()
         windowManager.closeAll()
         remoteWindows.removeAll()
@@ -833,24 +847,83 @@ public final class AppModel {
             })
             try await capture.start(cgWindowID: cgWindowID, sink: sink)
             AppLog.info("capture started for cgWindowID=\(cgWindowID); broadcasting share")
+            let info = await capture.shareInfo
+
+            // Uplink admission (M11): compute this share's target bitrate and check it fits alongside
+            // the existing shares. Degrade the whole set uniformly if needed; refuse (tear down, no
+            // dangling capture) if it won't fit even at the floor.
+            if !(await admitShare(windowID: windowID, kind: .window, info: info)) {
+                await teardownFailedShare(windowID)
+                return
+            }
+
             // Commit the context (the share is now live).
             shareContext = pending
             // Update authoritative room + broadcast.
             room.addShare(windowID, owner: me)
             // Populate the advisory ShareInfo (title/app/source pixels) captured at start so receivers
             // can title + aspect-size their viewer window before the first frame (M9).
-            if let info = await capture.shareInfo { room.setShareInfo(info, window: windowID) }
+            if let info { room.setShareInfo(info, window: windowID) }
             broadcastState()
             broadcastShareEvent(.shared, windowID: windowID, owner: me, info: room.info(of: windowID))
         } catch {
             AppLog.error("startSharing failed: \(String(describing: error))")
-            localCaptures[windowID] = nil
-            localShareKinds[windowID] = nil
-            await transport.unpublishVideoTrack(for: windowID)
-            // Roll the context back to exclude the failed share.
-            await pushShareContext(shareContext)
+            await teardownFailedShare(windowID)
         }
     }
+
+    /// Run uplink admission for a pending share; on `.degrade` uniformly rescale existing shares'
+    /// bitrates; set the admitted bitrate on the transport. Returns false if REFUSED (with a visible
+    /// reason set). Screen-content bitrate comes from the source pixel dims via ShareBitratePolicy.
+    private func admitShare(windowID: WindowID, kind: ShareKind, info: ShareInfo?) async -> Bool {
+        let w = info?.sourcePixelWidth ?? 1920
+        let h = info?.sourcePixelHeight ?? 1080
+        let requested = ShareBitratePolicy.bitrate(pixelWidth: w, pixelHeight: h)
+        let existing = localShareBitrates.values.map { $0 }
+        let decision = admission.admitShare(
+            existingBitrates: existing, requestedBitrate: requested,
+            measuredUplinkBps: Self.assumedUplinkBps, peerCount: participants.count, topology: .sfu)
+        switch decision {
+        case .admit(let bitrate):
+            localShareBitrates[windowID] = bitrate
+            await transport.setShareBitrate(windowID: windowID, bps: bitrate)
+            shareRefusedReason = nil
+            return true
+        case .degrade(let perWindow):
+            // Uniformly rescale EVERY share (existing + new) to the common fitting bitrate.
+            localShareBitrates[windowID] = perWindow
+            for id in localShareBitrates.keys { localShareBitrates[id] = perWindow }
+            for id in localShareBitrates.keys { await transport.setShareBitrate(windowID: id, bps: perWindow) }
+            shareRefusedReason = nil
+            return true
+        case .refuseAtCapacity(let reason):
+            shareRefusedReason = Self.refusalMessage(reason)
+            AppLog.error("share refused by admission: \(reason)")
+            return false
+        }
+    }
+
+    private static func refusalMessage(_ reason: AdmissionController.RefuseReason) -> String {
+        switch reason {
+        case .encodeSessionCap(let max):
+            return "Can't share another surface: this Mac's encoder is at capacity (max \(max) concurrent shares)."
+        case .uplinkExhausted:
+            return "Can't share another surface: your upload bandwidth is fully committed. Unshare something first."
+        }
+    }
+
+    /// Tear down a share that failed to start or was refused — no dangling capture, context rolled back.
+    private func teardownFailedShare(_ windowID: WindowID) async {
+        if let capture = localCaptures[windowID] { await capture.stop() }
+        localCaptures[windowID] = nil
+        localShareKinds[windowID] = nil
+        localShareBitrates[windowID] = nil
+        await transport.unpublishVideoTrack(for: windowID)
+        await pushShareContext(shareContext) // exclude the failed share
+    }
+
+    /// Dismiss the admission-refusal alert.
+    public func dismissShareRefusal() { shareRefusedReason = nil }
 
     /// Push a share context to the transport (windowCount + wholeDisplay) — the transport's
     /// CodecSelector reads it when building publish options at completePublish (D5).
@@ -869,6 +942,7 @@ public final class AppModel {
         localCaptures[windowID] = nil
         let kind = localShareKinds[windowID] ?? .window
         localShareKinds[windowID] = nil
+        localShareBitrates[windowID] = nil
         await transport.unpublishVideoTrack(for: windowID)
         room.removeShare(windowID)
         // Update the structural context (removing this share) so any remaining tracks reflect it.

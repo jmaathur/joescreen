@@ -38,6 +38,14 @@ struct SessionView: View {
                 .help("Share one of your windows with the room")
             }
         }
+        // Admission refusal (M11): a visible alert when a share won't fit the uplink / encode budget.
+        .alert("Can't share", isPresented: Binding(
+            get: { model.shareRefusedReason != nil },
+            set: { if !$0 { model.dismissShareRefusal() } })) {
+            Button("OK", role: .cancel) { model.dismissShareRefusal() }
+        } message: {
+            Text(model.shareRefusedReason ?? "")
+        }
     }
 }
 
