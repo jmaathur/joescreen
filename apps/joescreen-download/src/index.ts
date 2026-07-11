@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { landingPage } from "./page";
+import { RELEASES, CURRENT_VERSION } from "./changelog";
 
 type Bindings = {
 	// Optional so the worker still deploys (and /download 404s gracefully) if the R2 binding
@@ -12,9 +13,10 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-// Landing page.
+// Landing page. The changelog module is the single source of truth for the version + "What's new"
+// history; APP_VERSION (env) is only a fallback if the release list is somehow empty.
 app.get("/", (c) => {
-	return c.html(landingPage({ version: c.env.APP_VERSION }));
+	return c.html(landingPage({ version: CURRENT_VERSION || c.env.APP_VERSION, releases: RELEASES }));
 });
 
 // Stream the notarized .dmg from R2. HEAD is supported so the page can show the size.
@@ -39,6 +41,6 @@ app.on(["GET", "HEAD"], "/download", async (c) => {
 });
 
 // Lightweight health/version endpoint (handy for the release script to verify a deploy).
-app.get("/version", (c) => c.json({ version: c.env.APP_VERSION, env: c.env.ENVIRONMENT }));
+app.get("/version", (c) => c.json({ version: CURRENT_VERSION || c.env.APP_VERSION, env: c.env.ENVIRONMENT }));
 
 export default app;

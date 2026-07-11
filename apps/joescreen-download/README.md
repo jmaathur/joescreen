@@ -23,7 +23,9 @@ From the repo root:
 bun run dist:mac        # build + notarize + staple → apps/joescreen/build/dist-mac/JoeScreen.dmg
 bun run publish:dmg     # upload that .dmg to r2://joescreen-downloads/JoeScreen.dmg
 ```
-Bump `APP_VERSION` in `wrangler.jsonc` when you ship a new version (shown on the page).
+When you ship a new version, prepend a release to **`src/changelog.ts`** (the single source of truth
+for the version badge + the page's "What's new" section) and add the matching entry to the repo's
+`/CHANGELOG.md`. `APP_VERSION` in `wrangler.jsonc` is only a fallback if the release list is empty.
 
 ## Deploy the worker
 - **Automatic:** merges to `main` that touch `apps/joescreen-download/**` deploy production via

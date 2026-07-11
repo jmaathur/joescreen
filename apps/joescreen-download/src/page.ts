@@ -1,6 +1,42 @@
+import type { Release } from "./changelog";
+
+function esc(s: string): string {
+	return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+}
+
+/** Render the "What's new" version-history section from the release list (newest first). */
+function changelogSection(releases: Release[]): string {
+	if (releases.length === 0) return "";
+	const fmtDate = (iso: string) => {
+		const d = new Date(iso + "T00:00:00Z");
+		return isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+	};
+	const entries = releases
+		.map(
+			(r) => `
+      <li class="release">
+        <div class="release-head">
+          <span class="ver">v${esc(r.version)}</span>
+          ${r.tag ? `<span class="badge">${esc(r.tag)}</span>` : ""}
+          <span class="date">${esc(fmtDate(r.date))}</span>
+        </div>
+        <ul class="notes">
+          ${r.highlights.map((h) => `<li>${esc(h)}</li>`).join("\n          ")}
+        </ul>
+      </li>`,
+		)
+		.join("\n");
+	return `
+    <section class="changelog" aria-label="Version history">
+      <h2>What's new</h2>
+      <ol class="releases">${entries}
+      </ol>
+    </section>`;
+}
+
 // The landing page HTML, inlined so the worker has no build step / asset pipeline.
-export function landingPage(opts: { version: string }): string {
-	const { version } = opts;
+export function landingPage(opts: { version: string; releases?: Release[] }): string {
+	const { version, releases = [] } = opts;
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -58,6 +94,16 @@ export function landingPage(opts: { version: string }): string {
   .feature p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
   .steps { margin-top: 44px; color: var(--muted); font-size: 14px; line-height: 1.7; }
   .steps b { color: var(--text); }
+  .changelog { margin: 56px auto 0; max-width: 560px; text-align: left; }
+  .changelog h2 { font-size: 18px; margin: 0 0 16px; letter-spacing: -0.01em; }
+  .releases { list-style: none; margin: 0; padding: 0; }
+  .release { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
+  .release-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .release-head .ver { font-weight: 700; font-size: 15px; }
+  .release-head .badge { font-size: 11px; font-weight: 650; color: #fff; background: linear-gradient(160deg, var(--brand-2), var(--brand)); padding: 3px 9px; border-radius: 999px; letter-spacing: .02em; }
+  .release-head .date { margin-left: auto; color: var(--muted); font-size: 12.5px; }
+  .notes { margin: 0; padding-left: 18px; }
+  .notes li { color: var(--muted); font-size: 13.5px; line-height: 1.6; margin: 3px 0; }
   footer { text-align: center; color: var(--muted); font-size: 12.5px; padding: 28px 24px 40px; border-top: 1px solid var(--border); }
   footer a { color: var(--muted); }
 </style>
@@ -82,7 +128,7 @@ export function landingPage(opts: { version: string }): string {
       <div class="feature"><h3>Click &amp; type in</h3><p>Interact with any shared window — routed back to the owner's Mac without stealing focus.</p></div>
       <div class="feature"><h3>Built-in voice</h3><p>Talk while you work, on the same live connection.</p></div>
     </section>
-
+${changelogSection(releases)}
     <p class="steps">
       <b>To install:</b> open the downloaded <code>.dmg</code>, drag <b>JoeScreen</b> to Applications, and launch it.<br/>
       Grant <b>Screen&nbsp;Recording</b> (and <b>Accessibility</b> to control shared windows) when prompted.
