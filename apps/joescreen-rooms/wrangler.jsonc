@@ -14,10 +14,9 @@
 	// that stays in the Go token server (DECISIONS §5.4); this Worker only does slugs + presence.
 	"vars": {
 		"ENVIRONMENT": "development",
-		// The SFU URL the app dials (wss://…); baked into the invite so every joiner uses the same SFU.
+		// Local dev: the dev SFU (`bun run livekit`). No HTTPS RoomService locally, so presence
+		// degrades to "unknown" — that's expected in dev. Production uses sfu.cheffing.dev (env below).
 		"LIVEKIT_URL": "ws://localhost:7880",
-		// The LiveKit RoomService HTTP base (https://…) for presence (ListParticipants). Empty ⇒
-		// presence is reported as unknown rather than failing the page.
 		"LIVEKIT_API_URL": "",
 		// Where the app can be downloaded when the deep link doesn't resolve (no app installed).
 		"DOWNLOAD_URL": "https://joescreen.cheffing.dev"
@@ -41,8 +40,8 @@
 				// so leave them empty; the app-token path is the Go token server, not this worker.
 				//   LIVEKIT_URL:     the wss:// URL the app dials (baked into every invite)
 				//   LIVEKIT_API_URL: the https:// RoomService base for presence
-				"LIVEKIT_URL": "",
-				"LIVEKIT_API_URL": "",
+				"LIVEKIT_URL": "wss://sfu.cheffing.dev",
+				"LIVEKIT_API_URL": "https://sfu.cheffing.dev",
 				"DOWNLOAD_URL": "https://joescreen.cheffing.dev"
 			},
 			"kv_namespaces": [
