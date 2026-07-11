@@ -32,6 +32,10 @@ public actor WindowCaptureService: NSObject {
         case resumed
         /// The window was minimized ⇒ the share should end (R13).
         case minimizedShouldUnshare
+        /// The source window settled at a new PIXEL size after a resize (post-stabilizer); the
+        /// SCStream was reconfigured to match. The app re-broadcasts these dimensions in ShareInfo so
+        /// receivers re-aspect their viewer window. (M9)
+        case resized(pixelWidth: Int, pixelHeight: Int)
         /// The stream stopped with an error (SCStreamDelegate.didStopWithError).
         case stopped(reason: String)
     }
@@ -43,11 +47,17 @@ public actor WindowCaptureService: NSObject {
     private var completeFrameCount = 0
     private var eventContinuation: AsyncStream<Event>.Continuation?
     private var minimizeWatcher: MinimizeUnshareWatcher?
+    private var resizeWatcher: WindowResizeWatcher?
+    private var resizeStabilizer = ResizeStabilizer()
     private var pauseTicker: Task<Void, Never>?
 
     /// The captured window's owner-space frame (for CoordinateMapper / window bounds), set on start.
     public private(set) var capturedWindowFrame: CGRect?
     public private(set) var backingScale: Double = 1.0
+
+    /// Advisory metadata about the shared window, captured at `start` (title/app/source pixels/kind).
+    /// The app broadcasts it in the RoomModel so receivers can title + aspect-size a viewer window.
+    public private(set) var shareInfo: ShareInfo?
 
     /// - Parameter windowID: the JoeScreen window identity this capture publishes under (the track
     ///   name is derived from it upstream). Distinct from the OS `CGWindowID`.
@@ -115,6 +125,16 @@ public actor WindowCaptureService: NSObject {
         config.height = Int(window.frame.height * CGFloat(scale))
         config.queueDepth = 5
         capturedWindowFrame = window.frame
+        resizeStabilizer.seed(window.frame.size)
+
+        // Capture advisory ShareInfo from the SCWindow (title + owning app + source pixels). Receivers
+        // use it to title + aspect-size the viewer window before the first frame lands (M9).
+        shareInfo = ShareInfo(
+            kind: .window,
+            title: window.title,
+            appName: window.owningApplication?.applicationName,
+            sourcePixelWidth: config.width,
+            sourcePixelHeight: config.height)
 
         let output = FrameOutput { [weak self] box, status in
             // `box` is a CMSampleBufferBox (Sendable) built ON the capture queue before crossing into
@@ -139,6 +159,14 @@ public actor WindowCaptureService: NSObject {
         watcher.start()
         self.minimizeWatcher = watcher
 
+        // Resize watcher (M9): a settled source resize ⇒ rebuild the SCStream config so receivers
+        // stay aspect-true. Raw poll → ResizeStabilizer (jitter/confirm) inside handleResizePoll.
+        let resize = WindowResizeWatcher(cgWindowID: window.windowID) { [weak self] size in
+            Task { await self?.handleResizePoll(size) }
+        }
+        resize.start()
+        self.resizeWatcher = resize
+
         // Pause ticker: PauseDetector needs a timer tick to notice a TOTAL delivery stop (off-Space),
         // which produces no sample callbacks at all (R13).
         startPauseTicker()
@@ -148,12 +176,56 @@ public actor WindowCaptureService: NSObject {
     public func stop() async {
         pauseTicker?.cancel(); pauseTicker = nil
         minimizeWatcher?.stop(); minimizeWatcher = nil
+        resizeWatcher?.stop(); resizeWatcher = nil
         if let stream {
             try? await stream.stopCapture()
         }
         stream = nil
         output = nil
         eventContinuation?.finish()
+    }
+
+    // MARK: - Resize handling (M9)
+
+    /// A raw 4 Hz size sample from the resize watcher. Runs it through the stabilizer; on a settled
+    /// change, rebuilds the SCStreamConfiguration to the new pixel size and applies it live via
+    /// `updateConfiguration` (async, macOS 12.3+), updates `capturedWindowFrame` + `shareInfo`, and
+    /// emits `.resized` so the app re-broadcasts the new dimensions.
+    private func handleResizePoll(_ pointSize: CGSize) async {
+        guard let settled = resizeStabilizer.observe(pointSize), let stream else { return }
+        let pixelW = Int((settled.width * CGFloat(backingScale)).rounded())
+        let pixelH = Int((settled.height * CGFloat(backingScale)).rounded())
+        guard pixelW > 0, pixelH > 0 else { return }
+
+        let config = SCStreamConfiguration()
+        config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        config.showsCursor = false
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        config.width = pixelW
+        config.height = pixelH
+        config.queueDepth = 5
+
+        do {
+            try await stream.updateConfiguration(config)
+        } catch {
+            // A failed reconfigure is non-fatal: the stream keeps delivering at the old size, so the
+            // window just stays its prior aspect. Roll the stabilizer back so a retry can re-fire.
+            resizeStabilizer.seed(capturedWindowFrame?.size ?? pointSize)
+            return
+        }
+
+        // Update our owner-space frame (origin unchanged; only size shifts here — the app resolves
+        // injection against live bounds elsewhere) and the advisory ShareInfo dimensions.
+        if var frame = capturedWindowFrame {
+            frame.size = settled
+            capturedWindowFrame = frame
+        }
+        if var info = shareInfo {
+            info.sourcePixelWidth = pixelW
+            info.sourcePixelHeight = pixelH
+            shareInfo = info
+        }
+        emit(.resized(pixelWidth: pixelW, pixelHeight: pixelH))
     }
 
     // MARK: - Frame handling

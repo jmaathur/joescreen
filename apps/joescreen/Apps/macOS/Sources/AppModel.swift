@@ -492,6 +492,7 @@ public final class AppModel {
                     case .resumed: self?.setLocalPause(windowID, .live)
                     case .minimizedShouldUnshare: self?.unshare(windowID)
                     case .stopped: self?.unshare(windowID)
+                    case .resized(let w, let h): self?.updateShareDimensions(windowID, pixelWidth: w, pixelHeight: h)
                     case .frame: break
                     }
                 }
@@ -500,9 +501,12 @@ public final class AppModel {
             AppLog.info("capture started for cgWindowID=\(cgWindowID); broadcasting share")
             // Update authoritative room + broadcast.
             room.addShare(windowID, owner: me)
+            // Populate the advisory ShareInfo (title/app/source pixels) captured at start so receivers
+            // can title + aspect-size their viewer window before the first frame (M9).
+            if let info = await capture.shareInfo { room.setShareInfo(info, window: windowID) }
             await transport.updateShareContext(windowCount: localCaptures.count, wholeDisplay: false)
             broadcastState()
-            broadcastShareEvent(.shared, windowID: windowID, owner: me)
+            broadcastShareEvent(.shared, windowID: windowID, owner: me, info: room.info(of: windowID))
         } catch {
             AppLog.error("startSharing failed: \(String(describing: error))")
             localCaptures[windowID] = nil
@@ -539,12 +543,24 @@ public final class AppModel {
         Task { try? await channel.send(bytes) }
     }
 
-    private func broadcastShareEvent(_ action: ShareEvent.Action, windowID: WindowID, owner: ParticipantID) {
+    private func broadcastShareEvent(_ action: ShareEvent.Action, windowID: WindowID,
+                                     owner: ParticipantID, info: ShareInfo? = nil) {
         guard let channel = stateChannel else { return }
-        let ev = ShareEvent(action: action, windowID: windowID, ownerID: owner, revision: room.revision)
+        let ev = ShareEvent(action: action, windowID: windowID, ownerID: owner,
+                            revision: room.revision, info: info)
         guard let env = try? WireCodec.pack(ev, sender: owner),
               let bytes = try? WireCodec.encode(env) else { return }
         Task { try? await channel.send(bytes) }
+    }
+
+    /// A local share's source window settled at a new size (post-stabilizer). Update the advisory
+    /// ShareInfo dimensions in the authoritative room and re-broadcast so receivers re-aspect.
+    private func updateShareDimensions(_ windowID: WindowID, pixelWidth: Int, pixelHeight: Int) {
+        guard room.owner(of: windowID) == localParticipantID,
+              var info = room.info(of: windowID) else { return }
+        info.sourcePixelWidth = pixelWidth
+        info.sourcePixelHeight = pixelHeight
+        if room.setShareInfo(info, window: windowID) { broadcastState() }
     }
 
     // MARK: - Roster helpers
