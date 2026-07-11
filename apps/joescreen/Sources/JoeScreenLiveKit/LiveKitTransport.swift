@@ -76,6 +76,12 @@ public actor LiveKitTransport: MediaTransport {
     /// each `didUpdateDimensions`). The app uses it to keep a viewer window aspect-true. (width, height.)
     private var onTrackDimensions: (@Sendable (RemoteTrackDescriptor, Int, Int) -> Void)?
 
+    /// Per-participant media presence (name/speaking/mic/camera) for the tile strip (M10). The pure
+    /// reducer folds delegate events; the transport reads the correct source (isMuted, not
+    /// un/subscription) and pushes the snapshot via `onParticipantMediaChanged`.
+    private var mediaReducer = ParticipantMediaReducer()
+    private var onParticipantMediaChanged: (@Sendable ([ParticipantID: ParticipantMediaState]) -> Void)?
+
     /// SIDs we've already reported gone this session, so the unsubscribe→unpublish pair fires once.
     private var reportedGone: Set<String> = []
     /// SIDs we unsubscribed OURSELVES (a user-close / soft-hide), so the resulting delegate callback
@@ -117,6 +123,41 @@ public actor LiveKitTransport: MediaTransport {
     /// Install the dimensions hook (width, height pixels, per subscribed track).
     public func setOnTrackDimensions(_ handler: @escaping @Sendable (RemoteTrackDescriptor, Int, Int) -> Void) {
         self.onTrackDimensions = handler
+    }
+
+    /// Install the participant-media hook (name/speaking/mic/camera per participant). Fires once
+    /// immediately with a fresh seed from the current room so a late observer isn't missed (M10).
+    public func setOnParticipantMediaChanged(
+        _ handler: @escaping @Sendable ([ParticipantID: ParticipantMediaState]) -> Void
+    ) {
+        self.onParticipantMediaChanged = handler
+        reseedMediaState()
+        handler(mediaReducer.states)
+    }
+
+    /// Derive the full media-state map from the current room (late-join seeding, and on `.connected`).
+    /// Reads the CORRECT sources: mic/camera live = published AND unmuted (isCameraEnabled /
+    /// isMicrophoneEnabled read the publication mute state, never track subscription).
+    private func reseedMediaState() {
+        var snapshot: [ParticipantID: ParticipantMediaState] = [:]
+        func record(_ participant: Participant) {
+            guard let identity = participant.identity?.stringValue,
+                  let pid = participantID(forIdentity: identity) else { return }
+            snapshot[pid] = ParticipantMediaState(
+                displayName: nonEmpty(participant.name),
+                isSpeaking: participant.isSpeaking,
+                micLive: participant.isMicrophoneEnabled(),
+                cameraOn: participant.isCameraEnabled())
+        }
+        record(room.localParticipant)
+        for p in room.remoteParticipants.values { record(p) }
+        mediaReducer.seed(snapshot)
+    }
+
+    /// Fold a media event and push the updated snapshot to the app.
+    private func applyMedia(_ event: ParticipantMediaReducer.Event) {
+        let states = mediaReducer.reduce(event)
+        onParticipantMediaChanged?(states)
     }
 
     /// Hard subscribe/unsubscribe a window's share track at the SFU (`set(subscribed:)`) — zero
@@ -240,6 +281,7 @@ public actor LiveKitTransport: MediaTransport {
         reportedGone.removeAll()
         locallyUnsubscribed.removeAll()
         windowTrackSIDs.removeAll()
+        mediaReducer = ParticipantMediaReducer()
         if let observer { room.remove(delegate: observer) }
         observer = nil
         updateState(.disconnected)
@@ -463,8 +505,12 @@ public actor LiveKitTransport: MediaTransport {
     func handleConnectionState(_ state: MediaConnectionState) {
         updateState(state)
         // On (re)connect the room re-seeds its participant list; refresh the roster so peers that
-        // were present across a reconnect reappear.
-        if state == .connected { onParticipantsChanged?(currentParticipantIDs()) }
+        // were present across a reconnect reappear, and re-derive the full media-state map (M10).
+        if state == .connected {
+            onParticipantsChanged?(currentParticipantIDs())
+            reseedMediaState()
+            onParticipantMediaChanged?(mediaReducer.states)
+        }
     }
 
     func handleParticipantConnected(identity: String?) {
@@ -473,16 +519,55 @@ public actor LiveKitTransport: MediaTransport {
             participantToIdentity[pid] = identity
         }
         onParticipantsChanged?(currentParticipantIDs())
+        // Seed the newcomer's media state (M10): read their published/muted state right now.
+        if let identity, let pid = participantID(forIdentity: identity),
+           let participant = remoteParticipant(forIdentity: identity) {
+            applyMedia(.upsert(id: pid, displayName: nonEmpty(participant.name),
+                               micLive: participant.isMicrophoneEnabled(),
+                               cameraOn: participant.isCameraEnabled()))
+        }
     }
 
     func handleParticipantDisconnected(identity: String?) {
+        var goneID: ParticipantID?
         if let identity {
             if let pid = identityToParticipant[identity] {
+                goneID = pid
                 participantToIdentity[pid] = nil
             }
             identityToParticipant[identity] = nil
         }
         onParticipantsChanged?(currentParticipantIDs())
+        if let goneID { applyMedia(.left(id: goneID)) }
+    }
+
+    // MARK: - Participant media state handlers (M10)
+
+    func handleSpeakingChanged(identities: [String]) {
+        let ids = Set(identities.compactMap { participantID(forIdentity: $0) })
+        applyMedia(.speakingSet(ids))
+    }
+
+    func handleNameChanged(identity: String?, name: String) {
+        guard let identity, let pid = participantID(forIdentity: identity) else { return }
+        applyMedia(.nameChanged(id: pid, displayName: nonEmpty(name)))
+    }
+
+    /// A publication's mute flipped. `source` tells us which lever (mic vs camera). `isMuted` is the
+    /// VERIFIED source of truth — a muted camera stays subscribed, so we must read this, never track
+    /// un/subscription. `micLive`/`cameraOn` = published (has a track) AND not muted.
+    func handleMuteChanged(identity: String?, source: RemoteTrackSourceKind, isMuted: Bool) {
+        guard let identity, let pid = participantID(forIdentity: identity) else { return }
+        let live = !isMuted
+        switch source {
+        case .microphone:      applyMedia(.micLive(id: pid, live))
+        case .camera:          applyMedia(.cameraOn(id: pid, live))
+        default:               break
+        }
+    }
+
+    private func remoteParticipant(forIdentity identity: String) -> RemoteParticipant? {
+        room.remoteParticipants.values.first { $0.identity?.stringValue == identity }
     }
 
     func handleTrackSubscribed(

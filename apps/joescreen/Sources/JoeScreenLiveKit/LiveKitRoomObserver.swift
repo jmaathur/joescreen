@@ -77,6 +77,28 @@ final class LiveKitRoomObserver: NSObject, RoomDelegate, Sendable {
         Task { [weak transport] in await transport?.handleTrackUnpublished(trackSID: sid) }
     }
 
+    // MARK: - Participant media state (M10)
+
+    func room(_ room: Room, didUpdateSpeakingParticipants participants: [Participant]) {
+        let identities = participants.compactMap { $0.identity?.stringValue }
+        Task { [weak transport] in await transport?.handleSpeakingChanged(identities: identities) }
+    }
+
+    func room(_ room: Room, participant: Participant, didUpdateName name: String) {
+        let identity = participant.identity?.stringValue
+        Task { [weak transport] in await transport?.handleNameChanged(identity: identity, name: name) }
+    }
+
+    func room(_ room: Room, participant: Participant, trackPublication: TrackPublication,
+              didUpdateIsMuted isMuted: Bool) {
+        // Extract the Sendable primitives on the delegate thread; the actor reads mute from these.
+        let identity = participant.identity?.stringValue
+        let source = RemoteTrackSourceKind(trackPublication.source)
+        Task { [weak transport] in
+            await transport?.handleMuteChanged(identity: identity, source: source, isMuted: isMuted)
+        }
+    }
+
     // MARK: - Data
 
     func room(_ room: Room, participant: RemoteParticipant?, didReceiveData data: Data,

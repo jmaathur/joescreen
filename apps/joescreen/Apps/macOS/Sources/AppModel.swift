@@ -40,10 +40,15 @@ public final class AppModel {
     /// The RemoteWindowManager opens/closes native NSWindows to match this set.
     public private(set) var remoteWindows: [WindowID: RemoteVideoWindow] = [:]
 
+    /// Per-participant live media presence (name/speaking/mic/camera) for the tile strip (M10),
+    /// pushed reactively from the transport. cameraOn distinguishes "show video" from "show avatar"
+    /// (a muted camera stays subscribed → cameraTracks still holds it, but cameraOn is false).
+    public private(set) var participantMedia: [ParticipantID: ParticipantMediaState] = [:]
+
     /// Remote participant CAMERA tracks (M10), keyed by owner. Distinct from window shares — these
     /// render as tiles in the participant strip, not native windows. A muted camera stays subscribed
     /// (LiveKit mutes rather than unpublishes), so presence here means "renderable camera track"; the
-    /// cameraOn flag in ParticipantMediaState (M10.3) governs whether to show video vs an avatar.
+    /// cameraOn flag in ParticipantMediaState governs whether to show video vs an avatar.
     public private(set) var cameraTracks: [ParticipantID: JoeScreenLiveKit.RemoteVideoTrackRef] = [:]
     /// The SID that delivered each owner's camera track, so a trackGone for that SID clears it.
     private var cameraTrackSIDs: [ParticipantID: String] = [:]
@@ -177,6 +182,10 @@ public final class AppModel {
                 }
             }
         }
+        // Participant media state (M10): name/speaking/mic/camera pushed reactively for the tile strip.
+        await transport.setOnParticipantMediaChanged { [weak self] states in
+            Task { @MainActor in self?.applyParticipantMedia(states) }
+        }
 
         // Install the participant-roster hook BEFORE connecting so early joiners aren't missed. This
         // is what makes EVERYONE connected appear in the roster — not just those who've shared a
@@ -242,6 +251,8 @@ public final class AppModel {
         remoteWindows.removeAll()
         cameraTracks.removeAll()
         cameraTrackSIDs.removeAll()
+        participantMedia = [:]
+        displayNames = [:]
         for t in graceTimers.values { t.cancel() }
         graceTimers.removeAll()
         lifecycles.removeAll()
@@ -461,6 +472,17 @@ public final class AppModel {
         transportParticipants.insert(owner)
         recomputeRoster()
         feed(windowID, .trackSubscribed) // → openWindow effect
+    }
+
+    // MARK: - Participant media (M10)
+
+    /// Apply the reactive media-state snapshot from the transport, and fold any display names it
+    /// carries into the name cache so `displayLabel` updates live on `didUpdateName` / late-join.
+    private func applyParticipantMedia(_ states: [ParticipantID: ParticipantMediaState]) {
+        participantMedia = states
+        for (id, s) in states where s.displayName != nil {
+            displayNames[id] = s.displayName
+        }
     }
 
     // MARK: - Camera tiles (M10)
