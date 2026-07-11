@@ -485,6 +485,46 @@ public final class AppModel {
         }
     }
 
+    /// Live media state for a participant (nil if unknown).
+    public func mediaState(for id: ParticipantID) -> ParticipantMediaState? { participantMedia[id] }
+
+    /// The remote camera track for a participant, if any.
+    public func cameraTrack(for id: ParticipantID) -> JoeScreenLiveKit.RemoteVideoTrackRef? {
+        cameraTracks[id]
+    }
+
+    /// The planned tile order + decode budget for the strip (self first, remotes name-then-UUID,
+    /// cameras beyond the budget park as avatars; shares take priority). Pure `TileSubscriptionPlanner`.
+    public var plannedTiles: [TileSubscriptionPlanner.Tile] {
+        let me = localParticipantID
+        let remotes = participants.subtracting(me.map { [$0] } ?? []).sorted { $0.uuidString < $1.uuidString }
+        return TileSubscriptionPlanner.plan(
+            selfID: me,
+            remotes: remotes,
+            displayName: { [weak self] in self?.displayNames[$0] },
+            hasRenderableCamera: { [weak self] in self?.cameraTracks[$0] != nil },
+            sharesDecoded: remoteWindows.count)
+    }
+
+    /// Raise all shared windows owned by `owner` (tap a participant tile).
+    public func focusSharesOf(owner: ParticipantID) {
+        for (windowID, win) in remoteWindows where win.ownerID == owner {
+            windowManager.focus(windowID)
+        }
+    }
+
+    /// The remote video track backing a shared window's live thumbnail (M10) — a SECOND renderer on
+    /// the already-held track (one decode, two renderers; adaptive-stream reports the max renderer
+    /// size so the big window keeps its quality; R32 satisfied by construction). Nil if not (yet) open.
+    public func remoteWindowTrack(_ windowID: WindowID) -> JoeScreenLiveKit.RemoteVideoTrackRef? {
+        remoteWindows[windowID]?.track
+    }
+
+    /// The source aspect ratio of a shared window (for an aspect-true thumbnail), if known.
+    public func remoteWindowAspect(_ windowID: WindowID) -> Double? {
+        remoteWindows[windowID]?.aspectRatio
+    }
+
     // MARK: - Camera tiles (M10)
 
     /// Record a remote participant's camera track for their tile. Keyed by owner; a newer SID for the

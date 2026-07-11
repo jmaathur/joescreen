@@ -1,6 +1,8 @@
 import SwiftUI
 import JoeScreenKit
 import JoeScreenUI
+import JoeScreenLiveKit
+import LiveKit
 
 /// The in-call view: connection banner, roster, share controls. Remote shared windows are rendered
 /// as separate native NSWindows (M4), not inside this view.
@@ -10,6 +12,10 @@ struct SessionView: View {
     var body: some View {
         VStack(spacing: 0) {
             ConnectionBanner()
+            Divider()
+            // The "see everyone" strip (M10): self tile + one per participant, between the banner
+            // and the roster/shares split. Hidden until there's someone/something to show.
+            ParticipantTileStrip()
             Divider()
             HStack(alignment: .top, spacing: 0) {
                 RosterView()
@@ -74,8 +80,9 @@ struct SharesPane: View {
 
     var body: some View {
         let shared = model.sharedWindowsSorted
-        // Nothing to show at all (no shares, camera off) → the empty-state hint.
-        if shared.isEmpty && model.localCameraTrack == nil {
+        // The self camera preview now lives in the participant strip (M10), so the shares pane is
+        // purely about shared windows: empty-state when there are none.
+        if shared.isEmpty {
             VStack(spacing: 10) {
                 Image(systemName: "rectangle.dashed")
                     .font(.system(size: 32))
@@ -91,10 +98,6 @@ struct SharesPane: View {
         } else {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 12)], spacing: 12) {
-                    // Local webcam self-preview (only while the camera is on), alongside shares.
-                    if let track = model.localCameraTrack {
-                        SelfPreviewTile(track: track)
-                    }
                     ForEach(shared, id: \.window) { entry in
                         SharedWindowTile(windowID: entry.window, ownerID: entry.owner)
                     }
@@ -121,9 +124,17 @@ struct SharedWindowTile: View {
                 .fill(.quaternary)
                 .aspectRatio(16.0/10.0, contentMode: .fit)
                 .overlay {
-                    Image(systemName: isClosed ? "macwindow.badge.plus" : "macwindow")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.secondary)
+                    // Live mini-thumbnail (M10): a SECOND SwiftUIVideoView on the already-held remote
+                    // track (one decode, two renderers; the big window keeps its quality). Falls back
+                    // to a glyph while the window is closed (no track) or not yet open.
+                    if !isClosed, let track = model.remoteWindowTrack(windowID) {
+                        SwiftUIVideoView(track, layoutMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    } else {
+                        Image(systemName: isClosed ? "macwindow.badge.plus" : "macwindow")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
