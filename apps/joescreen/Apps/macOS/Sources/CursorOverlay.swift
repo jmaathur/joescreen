@@ -16,6 +16,10 @@ final class CursorOverlayModel {
 struct CursorOverlay: View {
     let windowID: WindowID
     let size: CGSize
+    /// The video's aspect ratio, so an inbound cursor maps through the SAME letterbox content rect
+    /// the sender used — pointer tips align on the same pixel feature at both ends (M9 fix). Nil ⇒
+    /// fall back to the view rect (pre-M9 behavior) until dimensions are known.
+    let videoAspect: Double?
     @Environment(CursorOverlayModel.self) private var overlayModel
     @Environment(AppModel.self) private var model
 
@@ -24,11 +28,18 @@ struct CursorOverlay: View {
             ForEach(Array(overlayModel.cursors.keys), id: \.self) { participant in
                 if let point = overlayModel.cursors[participant] {
                     CursorPointer(color: model.color(for: participant))
-                        .position(x: point.x * size.width, y: point.y * size.height)
+                        .position(position(for: point))
                 }
             }
         }
         .allowsHitTesting(false)
+    }
+
+    private func position(for point: NormalizedPoint) -> CGPoint {
+        if let aspect = videoAspect, aspect > 0 {
+            return VideoFitMath.viewPoint(fromNormalized: point, videoAspect: aspect, viewSize: size)
+        }
+        return CGPoint(x: point.x * size.width, y: point.y * size.height)
     }
 }
 

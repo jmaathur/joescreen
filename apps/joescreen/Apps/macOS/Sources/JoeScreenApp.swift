@@ -50,5 +50,42 @@ struct JoeScreenApp: App {
         }
         // A single main window; remote shared windows are separate NSWindows (M4).
         .windowResizability(.contentSize)
+        .commands {
+            SharedWindowsCommands(model: model)
+        }
+    }
+}
+
+/// Window-menu commands for remote shared windows (M9): one Focus/Reopen item per share, plus
+/// "Bring All Shared Windows to Front" and a "Follow new shares" toggle.
+struct SharedWindowsCommands: Commands {
+    @Bindable var model: AppModel
+
+    var body: some Commands {
+        CommandGroup(after: .windowArrangement) {
+            Divider()
+            ForEach(model.sharedWindowsSorted, id: \.window) { entry in
+                Button(sharedItemTitle(entry)) {
+                    if model.isRemoteWindowClosed(entry.window) {
+                        model.reopenRemoteWindow(entry.window)
+                    } else {
+                        model.focusRemoteWindow(entry.window)
+                    }
+                }
+            }
+            Button("Bring All Shared Windows to Front") {
+                model.bringAllSharedWindowsToFront()
+            }
+            .disabled(model.sharedWindowsSorted.isEmpty)
+            Toggle("Follow New Shares", isOn: Binding(
+                get: { model.followNewShares },
+                set: { model.setFollowNewShares($0) }))
+        }
+    }
+
+    private func sharedItemTitle(_ entry: AppModel.SharedWindowEntry) -> String {
+        let owner = model.shortLabel(for: entry.owner)
+        let verb = model.isRemoteWindowClosed(entry.window) ? "Reopen" : "Focus"
+        return "\(verb) Shared Window · \(owner)"
     }
 }

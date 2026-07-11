@@ -105,12 +105,15 @@ struct SharesPane: View {
     }
 }
 
-/// A tile representing one shared window in the grid. M4 shows a live thumbnail + a "focus its
-/// native window" affordance; for now it shows owner-color chrome and pause state.
+/// A tile representing one shared window in the grid. Shows owner-color chrome, pause state, and a
+/// state-aware action: **Focus** raises the native viewer window; **Reopen** re-subscribes a window
+/// the user closed (M9). The placeholder glyph is the thumbnail until M10 upgrades it to live video.
 struct SharedWindowTile: View {
     @Environment(AppModel.self) private var model
     let windowID: WindowID
     let ownerID: ParticipantID
+
+    private var isClosed: Bool { model.isRemoteWindowClosed(windowID) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -118,13 +121,14 @@ struct SharedWindowTile: View {
                 .fill(.quaternary)
                 .aspectRatio(16.0/10.0, contentMode: .fit)
                 .overlay {
-                    Image(systemName: "macwindow")
+                    Image(systemName: isClosed ? "macwindow.badge.plus" : "macwindow")
                         .font(.system(size: 28))
                         .foregroundStyle(.secondary)
                 }
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(model.color(for: ownerID), lineWidth: 3))
+                .onTapGesture { focusOrReopen() }
             HStack(spacing: 6) {
                 Circle().fill(model.color(for: ownerID)).frame(width: 8, height: 8)
                 Text(model.shortLabel(for: ownerID))
@@ -133,7 +137,15 @@ struct SharedWindowTile: View {
                     Text("paused").font(.caption2).foregroundStyle(.orange)
                 }
                 Spacer()
+                Button(isClosed ? "Reopen" : "Focus") { focusOrReopen() }
+                    .buttonStyle(.borderless)
+                    .font(.caption2)
             }
         }
+    }
+
+    private func focusOrReopen() {
+        if isClosed { model.reopenRemoteWindow(windowID) }
+        else { model.focusRemoteWindow(windowID) }
     }
 }

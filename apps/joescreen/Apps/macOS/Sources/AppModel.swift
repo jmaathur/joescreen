@@ -40,6 +40,15 @@ public final class AppModel {
     /// The RemoteWindowManager opens/closes native NSWindows to match this set.
     public private(set) var remoteWindows: [WindowID: RemoteVideoWindow] = [:]
 
+    /// Per-window lifecycle state machines (M9). AppModel feeds events (subscribe/gone/close/
+    /// reopen/miniaturize/occlude/reconnecting/snapshot-removal) and EXECUTES the returned effects.
+    /// All the dead-window/desync correctness lives in the pure `RemoteWindowLifecycle` reducer.
+    private var lifecycles: [WindowID: RemoteWindowLifecycle] = [:]
+    /// Grace timers for windows parked in `.stale` during a reconnect (fire `graceExpired`).
+    private var graceTimers: [WindowID: Task<Void, Never>] = [:]
+    /// The reconnect grace window before a stale (frozen-frame) viewer is torn down.
+    private static let reconnectGraceSeconds: UInt64 = 10
+
     // MARK: - Local media controls (mic + webcam)
 
     /// Whether the local microphone is currently publishing. Drives the mic toggle in the control bar.
@@ -195,6 +204,9 @@ public final class AppModel {
         await transport.disconnect()
         windowManager.closeAll()
         remoteWindows.removeAll()
+        for t in graceTimers.values { t.cancel() }
+        graceTimers.removeAll()
+        lifecycles.removeAll()
         micEnabled = false
         cameraEnabled = false
         localCameraTrack = nil
@@ -219,10 +231,22 @@ public final class AppModel {
         let stream = transport.connectionStates()
         pumps.append(Task { @MainActor [weak self] in
             for await state in stream {
-                self?.mediaState = state
-                if case .failed(let r) = state { self?.fail(r) }
+                guard let self else { continue }
+                self.mediaState = state
+                self.applyMediaStateToLifecycles(state)
+                if case .failed(let r) = state { self.fail(r) }
             }
         })
+    }
+
+    /// Broadcast the media link's reconnecting state to every open window's lifecycle so a track that
+    /// drops mid-reconnect parks in `.stale` (frozen frame + badge) rather than tearing down (§3 M9).
+    private func applyMediaStateToLifecycles(_ state: MediaConnectionState) {
+        let reconnecting = (state == .reconnecting)
+        for windowID in lifecycles.keys {
+            feed(windowID, .transportReconnecting(reconnecting))
+            remoteWindows[windowID]?.isReconnecting = reconnecting && (lifecycles[windowID]?.state == .stale)
+        }
     }
 
     private func startParticipantPump() {
@@ -236,7 +260,18 @@ public final class AppModel {
     /// This is the LIVE membership source (local + all connected remotes), so disconnects actually
     /// remove people — unlike the additive snapshot path.
     private func applyParticipantSet(_ ids: Set<ParticipantID>) {
+        // Belt-and-braces (§3 M9): anyone who left since the last set gets `ownerDisconnected` fed to
+        // any window they own (a defensive path alongside trackGone — if the SDK dropped the track
+        // events, the participant diff still tears their windows down) and is pruned from the mirror
+        // WITHOUT bumping revision (receiver-local; the host stays the revision authority).
+        let departed = transportParticipants.subtracting(ids)
         transportParticipants = ids
+        for owner in departed {
+            for (windowID, win) in remoteWindows where win.ownerID == owner {
+                feed(windowID, .ownerDisconnected)
+            }
+            room.pruneParticipant(owner) // no revision bump
+        }
         recomputeRoster()
     }
 
@@ -283,58 +318,199 @@ public final class AppModel {
             }
         case .shareEvent:
             guard let ev = try? WireCodec.unpack(envelope, as: ShareEvent.self) else { return }
-            if ev.action == .unshared { removeRemoteWindowIfForeign(ev.windowID) }
+            // A prompt unshare notification: drive the window's lifecycle removal (the authoritative
+            // snapshot confirms it too, but this reacts without waiting for the next snapshot).
+            if ev.action == .unshared, lifecycles[ev.windowID] != nil {
+                feed(ev.windowID, .shareRemovedFromSnapshot)
+            }
             // `shared` is handled when the track subscribes; the snapshot carries authoritative state.
         default:
             break
         }
     }
 
-    /// Replace the mirrored room with `newRoom`, opening/closing viewer windows to match. Only a
-    /// JOINER applies foreign snapshots; the local sharer's own windows are driven by its capture.
+    /// Replace the mirrored room with `newRoom`, REPAIRING owner attribution and pause state on open
+    /// viewer windows and feeding snapshot-removal events into the lifecycle. Only a JOINER applies
+    /// foreign snapshots; the local sharer's own windows are driven by its capture.
     private func applyRoom(_ newRoom: RoomModel) {
+        let previousShares = Set(room.shares.keys)
         room = newRoom
-        // Recompute the roster (live transport members ∪ this snapshot's share owners ∪ me).
         recomputeRoster()
-        // Close any remote viewer window whose share disappeared.
-        for windowID in remoteWindows.keys where newRoom.owner(of: windowID) == nil {
-            removeRemoteWindowIfForeign(windowID)
+
+        // Owner + metadata repair: a track that subscribed before the first snapshot had a
+        // placeholder owner/title; every snapshot repairs it so chrome recolors/retitles live.
+        for (windowID, win) in remoteWindows {
+            if let owner = newRoom.owner(of: windowID), owner != win.ownerID {
+                win.ownerID = owner
+                windowManager.refreshTitle(win)
+            }
+            if let info = newRoom.info(of: windowID) {
+                let newTitle = info.title, newApp = info.appName, aspect = info.sourceAspectRatio
+                if win.title != newTitle || win.appName != newApp { win.title = newTitle; win.appName = newApp; windowManager.refreshTitle(win) }
+                if let aspect, win.aspectRatio != aspect { win.aspectRatio = aspect }
+            }
+            // Pause badge from broadcast state (previously ignored).
+            win.isPaused = (newRoom.pauseState(of: windowID) == .paused)
+        }
+
+        // A share that disappeared from this authoritative snapshot → lifecycle removal.
+        for windowID in previousShares where newRoom.owner(of: windowID) == nil {
+            feed(windowID, .shareRemovedFromSnapshot)
         }
     }
 
-    // MARK: - Remote windows
+    // MARK: - Remote windows (lifecycle-driven, M9)
+
+    /// Feed one event into a window's lifecycle reducer and execute the resulting effects. The
+    /// reducer holds ALL the correctness (grace parking, no-duplicate-window, soft/hard hide); this
+    /// just runs the effects against the NSWindow layer + transport.
+    private func feed(_ windowID: WindowID, _ event: RemoteWindowLifecycle.Event) {
+        guard var lifecycle = lifecycles[windowID] else { return }
+        let effects = lifecycle.reduce(event)
+        lifecycles[windowID] = lifecycle
+        execute(effects, for: windowID)
+    }
+
+    private func execute(_ effects: [RemoteWindowLifecycle.Effect], for windowID: WindowID) {
+        for effect in effects {
+            switch effect {
+            case .openWindow:
+                if let win = remoteWindows[windowID] { windowManager.open(win) }
+            case .closeWindow:
+                windowManager.close(windowID)
+            case .unsubscribe:
+                Task { await transport.setWindowTrackSubscribed(windowID: windowID, false) }
+            case .resubscribe:
+                Task { await transport.setWindowTrackSubscribed(windowID: windowID, true) }
+            case .pauseRendering:
+                remoteWindows[windowID]?.isRenderingActive = false
+            case .resumeRendering:
+                remoteWindows[windowID]?.isRenderingActive = true
+            case .purge:
+                purgeRemoteWindow(windowID)
+            }
+        }
+    }
 
     private func addRemoteWindow(windowID: WindowID, ownerHint: ParticipantID?,
                                  track: JoeScreenLiveKit.RemoteVideoTrackRef) {
-        // A duplicate subscribe for a window we already show is a no-op — never open a second window.
-        // (The reopen/replace-in-place path lands in M9.7 with the lifecycle reducer.)
-        guard remoteWindows[windowID] == nil else { return }
+        // Reopen / reconnect resubscribe: the SDK re-delivered a track for a window whose entry we
+        // still hold. Swap it in-place (no duplicate window) and let the reducer resume.
+        if let existing = remoteWindows[windowID] {
+            existing.track = track
+            existing.isReconnecting = false
+            windowManager.replaceContent(existing)
+            cancelGrace(windowID)
+            feed(windowID, .trackSubscribed)
+            return
+        }
         AppLog.info("remote track subscribed → opening native window for \(windowID)")
-        // Owner attribution priority: authoritative snapshot > the descriptor's resolved identity >
-        // the windowID (last-ditch, repaired later by applyRoom). The descriptor hint fixes the
-        // subscribe-before-snapshot case that used to color/title the window wrong forever.
+        // Owner attribution priority: authoritative snapshot > descriptor identity > windowID
+        // (repaired by applyRoom). ShareInfo (if the snapshot already has it) seeds aspect/title.
         let owner = room.owner(of: windowID) ?? ownerHint ?? windowID
-        let win = RemoteVideoWindow(windowID: windowID, ownerID: owner, track: track)
+        let info = room.info(of: windowID)
+        let win = RemoteVideoWindow(
+            windowID: windowID, ownerID: owner, track: track,
+            aspectRatio: info?.sourceAspectRatio, title: info?.title, appName: info?.appName)
+        win.isPaused = (room.pauseState(of: windowID) == .paused)
         remoteWindows[windowID] = win
-        // The track owner is definitely present; ensure they're in the roster even if the
-        // participant-changed hook and this subscription race.
+        lifecycles[windowID] = RemoteWindowLifecycle(
+            reconnecting: mediaState == .reconnecting)
         transportParticipants.insert(owner)
         recomputeRoster()
-        windowManager.open(win)
+        feed(windowID, .trackSubscribed) // → openWindow effect
     }
 
-    /// A remote sharer's track went away (stop/crash/disconnect). Close + purge its viewer window.
+    /// A remote sharer's track went away (stop/crash/disconnect). The reducer decides: park stale
+    /// during a reconnect, else close + purge.
     private func handleRemoteTrackGone(windowID: WindowID) {
-        guard remoteWindows[windowID] != nil else { return }
-        AppLog.info("remote track gone → closing viewer window for \(windowID)")
-        remoteWindows[windowID] = nil
-        windowManager.close(windowID)
+        guard lifecycles[windowID] != nil else { return }
+        feed(windowID, .trackGone(.trackEnded))
+        // If the reducer parked it stale, show the badge + arm the grace timer.
+        if lifecycles[windowID]?.state == .stale {
+            remoteWindows[windowID]?.isReconnecting = true
+            armGrace(windowID)
+        }
     }
 
-    private func removeRemoteWindowIfForeign(_ windowID: WindowID) {
-        guard remoteWindows[windowID] != nil else { return }
+    /// The user closed the viewer window (NSWindowDelegate.windowWillClose) — keep a reopenable entry.
+    /// Called by `RemoteWindowManager`'s per-window delegate (same app module).
+    func remoteWindowDelegateEvent(_ windowID: WindowID, _ event: RemoteWindowDelegate.Event) {
+        switch event {
+        case .userClosed:
+            // The window is already closing; execute the reducer WITHOUT a redundant closeWindow (the
+            // manager cut the delegate before a programmatic close, so this only fires on a real user
+            // close). We still cut downlink + keep the entry.
+            feed(windowID, .userClosed)
+        case .miniaturized(let value):
+            feed(windowID, .miniaturized(value))
+        case .occluded(let value):
+            feed(windowID, .occluded(value))
+        }
+    }
+
+    /// Reopen a user-closed viewer window (SharedWindowTile / Window menu). Re-subscribes; the new
+    /// track routes into the existing entry via `addRemoteWindow`'s reopen branch.
+    public func reopenRemoteWindow(_ windowID: WindowID) {
+        guard lifecycles[windowID]?.state == .closedByUser else { return }
+        feed(windowID, .userReopened) // → resubscribe effect
+    }
+
+    /// Terminal purge: drop the entry, lifecycle, timers. The window itself is closed by the
+    /// closeWindow effect (or was already closing on a user-close path).
+    private func purgeRemoteWindow(_ windowID: WindowID) {
         remoteWindows[windowID] = nil
-        windowManager.close(windowID)
+        lifecycles[windowID] = nil
+        cancelGrace(windowID)
+    }
+
+    // MARK: - Reconnect grace
+
+    private func armGrace(_ windowID: WindowID) {
+        cancelGrace(windowID)
+        graceTimers[windowID] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.reconnectGraceSeconds * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.feed(windowID, .graceExpired)
+        }
+    }
+
+    private func cancelGrace(_ windowID: WindowID) {
+        graceTimers[windowID]?.cancel()
+        graceTimers[windowID] = nil
+    }
+
+    /// The window manager asks for a window's cascade indices (owner index among current owners,
+    /// window index within that owner) so `WindowCascade` places it deterministically.
+    func cascadeIndices(for windowID: WindowID, owner: ParticipantID) -> (ownerIndex: Int, windowIndex: Int) {
+        // Owners currently rendered, sorted for a stable index.
+        let owners = Set(remoteWindows.values.map { $0.ownerID }).sorted { $0.uuidString < $1.uuidString }
+        let ownerIndex = owners.firstIndex(of: owner) ?? 0
+        let ownerWindows = remoteWindows.keys
+            .filter { remoteWindows[$0]?.ownerID == owner }
+            .sorted { $0.uuidString < $1.uuidString }
+        let windowIndex = ownerWindows.firstIndex(of: windowID) ?? 0
+        return (ownerIndex, windowIndex)
+    }
+
+    // MARK: - Window menu / focus actions
+
+    /// Whether newly-opened remote windows steal focus ("Follow New Shares", session pref).
+    public var followNewShares: Bool = false
+
+    public func focusRemoteWindow(_ windowID: WindowID) { windowManager.focus(windowID) }
+    public func bringAllSharedWindowsToFront() { windowManager.bringAllToFront() }
+    public func setFollowNewShares(_ follow: Bool) {
+        followNewShares = follow
+        windowManager.followNewShares = follow
+    }
+    public func setAlwaysOnTop(_ windowID: WindowID, _ onTop: Bool) {
+        windowManager.setAlwaysOnTop(windowID, onTop)
+    }
+
+    /// Whether a window is in the user-closed state (drives the tile's Reopen vs Focus button).
+    public func isRemoteWindowClosed(_ windowID: WindowID) -> Bool {
+        lifecycles[windowID]?.state == .closedByUser
     }
 
     // MARK: - Cursors (M6)
