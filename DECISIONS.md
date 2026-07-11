@@ -244,6 +244,41 @@ and M11 (`display:`) both build on this one contract; a single implementation ke
   measurement; a single constant to change. Off-screen tiles also self-limit via `LazyHStack`
   detaching renderers.
 
+## D18 — Whole-screen (display) share (M11)
+- **Codec context is computed including the pending share, options built at publish time.** The old
+  code snapshotted `VideoPublishOptions` before `updateShareContext`, so the D5 multi-window/display →
+  H.264 rule never applied to the track being published (latent bug #3). Fixed structurally:
+  `ShareContext` is the single place the codec rule lives; `AppModel` pushes the WITH-pending context
+  before `publishVideoTrack`, and the transport builds options inside `completePublish` (after the
+  first frame). **Why structural:** a pure `ShareContext` reducer makes "which codec, including the
+  pending share" an enumerable unit test instead of an ordering accident.
+- **Structural renegotiation is strict D5 (§5.2).** When the context flips the structural codec (a
+  live VP9 window when a display share joins ⇒ all H.264), the transport unpublishes + republishes the
+  SAME `LocalVideoTrack`/name/sink; the receiver sees unsubscribe+resubscribe of the same name and
+  swaps in place (~1s freeze accepted, no window flicker). A bare `trackEnded` now always parks
+  `.stale` with a grace (short 2s when connected — long enough to catch the renegotiation resubscribe
+  or confirm a crash; long 10s during an SFU-link reconnect); authoritative removals purge
+  immediately. A single flag could soften the strict-D5 freeze later.
+- **`showsCursor = true` for display shares (§5.1).** The sharer's pointer is baked into a display
+  share (the overlay cursor plane only covers window shares). Reversible if overlay-everywhere is
+  wanted.
+- **One display share per sharer in v1 (§5.3).** window+display mix allowed; display+display refused
+  with a visible reason. Simplifies admission; lift later.
+- **Display resolution: cap AREA at 4.096 Mpx, snap even, never upscale** (`DisplayResolutionPolicy`).
+  A 5K display is ~14.7 Mpx — unencodeable-for-legibility at 30fps — so it captures at ≈2389×1344.
+  1080p stays native.
+- **Admission is real now (revives dead code #4).** `ShareBitratePolicy` (`pixelArea × 30 × 0.04`,
+  clamped 1–8 Mbps) → `screenShareEncoding`. `maxEncodeSessions:3` at the call site (TYPE default
+  stays 1 pending Phase-0(f)); uplink 20 Mbps labeled ASSUMED. Refusal = visible alert, no publish,
+  no dangling capture.
+- **macOS-14 floor for the picker.** `includedWindows/includedDisplays` are 15.2+; on 14.0–15.1 the
+  display resolves by matching `filter.contentRect` against the CG display frames (`DisplayPickResolver`;
+  frames are unique in global space). Windows on the floor are best-effort with a retry notice.
+- **Hall-of-mirrors fix.** The display filter is `SCContentFilter(display:excludingApplications:[ownApp]
+  exceptingWindows:[])` — excludes ALL of JoeScreen's windows including future remote-share viewers,
+  so a display share never re-captures our own UI. The sharer's `ShareBorderOverlay` is likewise
+  invisible to receivers (our app is excluded).
+
 ---
 
 ### Derived per-codec QP bounds (D5)

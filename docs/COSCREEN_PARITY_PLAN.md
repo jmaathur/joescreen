@@ -438,3 +438,18 @@ exact expected outcomes.
 - **TESTING.md M10-6 live share thumbnail + tap-to-focus; big window keeps quality** (~5 min, 2 Macs +
   webrtc-internals to confirm one decode, and that a soft-hidden window drops the downlink even with
   the thumbnail visible — the review-fixed R24/R32 path).
+
+### M11 — whole-screen (display) share (need 2 Macs; a 5K display for M11-1)
+- **TESTING.md M11-1 5K display → receiver ≈2389×1344 aspect-true** (~5 min, 2 Macs + a 5K display).
+- **TESTING.md M11-2 window+display both H.264; window renegotiates ~1s freeze no flicker** (~10 min,
+  2 Macs + webrtc-internals). The single most important M11 verification.
+- **TESTING.md M11-3 hall-of-mirrors: JoeScreen's own windows absent from the shared display** (~5 min,
+  2 Macs).
+- **TESTING.md M11-4 screen lock pauses (badge), unlock resumes ≤2s** (~5 min, 2 Macs).
+- **TESTING.md M11-5 display unplug unshares ≤2s** (~5 min, 2 Macs + a detachable display).
+- **TESTING.md M11-6 second-display refused with a reason** (~2 min, 2 Macs + 2 displays on the sharer).
+- **TESTING.md M11-7 R27 observation: DRM window → black region** (~5 min, 2 Macs + a DRM source).
+- **TESTING.md M11-8 macOS 14.x picker resolution tier** (~10 min, needs a macOS 14.0–15.1 Mac —
+  exercise the DisplayPickResolver floor path). Skippable if no 14.x hardware.
+- **TESTING.md M11-9 sharer border overlay + "Sharing Display" chip/stop** (~3 min, 2 Macs — confirm
+  the border is invisible to the receiver).

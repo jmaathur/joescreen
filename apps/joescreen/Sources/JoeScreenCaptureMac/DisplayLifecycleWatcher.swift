@@ -11,14 +11,20 @@ import CoreGraphics
 ///    display is no longer active → terminal unshare (fires once).
 ///
 /// Callbacks may fire on the distributed-notification thread or the poll queue; the actor hops onto
-/// itself. `@unchecked Sendable`: immutable config + a lock-guarded fired flag.
+/// itself. `@unchecked Sendable`: immutable config + ALL mutable state guarded by `lock`. `start()`,
+/// `stop()`, and the timer handler are called from different executors (the DisplayCaptureService
+/// actor, the utility timer queue, and — for the notification observers — an arbitrary thread), so
+/// every mutable field is mutated only under `lock`, and `stop()` is idempotent.
 final class DisplayLifecycleWatcher: @unchecked Sendable {
     private let displayID: CGDirectDisplayID
     private let onLockChange: @Sendable (Bool) -> Void
     private let onDisplayRemoved: @Sendable () -> Void
     private let queue = DispatchQueue(label: "com.joescreen.capture.display", qos: .utility)
+    private let lock = NSLock()
+    // All guarded by `lock`.
     private var timer: DispatchSourceTimer?
     private var removedFired = false
+    private var stopped = false
     private var lockObserver: NSObjectProtocol?
     private var unlockObserver: NSObjectProtocol?
 
@@ -32,32 +38,54 @@ final class DisplayLifecycleWatcher: @unchecked Sendable {
 
     func start() {
         let dnc = DistributedNotificationCenter.default()
-        lockObserver = dnc.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: nil) { [weak self] _ in
+        let lockObs = dnc.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: nil) { [weak self] _ in
             self?.onLockChange(true)
         }
-        unlockObserver = dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: nil) { [weak self] _ in
+        let unlockObs = dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: nil) { [weak self] _ in
             self?.onLockChange(false)
         }
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 1.0, repeating: 1.0) // 1 Hz
         timer.setEventHandler { [weak self] in self?.pollDisplayPresence() }
+
+        lock.lock()
+        // A stop() that raced ahead of start() → don't arm anything.
+        guard !stopped else {
+            lock.unlock()
+            dnc.removeObserver(lockObs); dnc.removeObserver(unlockObs); timer.cancel()
+            return
+        }
+        self.lockObserver = lockObs
+        self.unlockObserver = unlockObs
         self.timer = timer
+        lock.unlock()
         timer.resume()
     }
 
     func stop() {
-        timer?.cancel(); timer = nil
+        lock.lock()
+        if stopped { lock.unlock(); return } // idempotent
+        stopped = true
+        let t = timer; let lockObs = lockObserver; let unlockObs = unlockObserver
+        timer = nil; lockObserver = nil; unlockObserver = nil
+        lock.unlock()
+        t?.cancel()
         let dnc = DistributedNotificationCenter.default()
-        if let lockObserver { dnc.removeObserver(lockObserver) }
-        if let unlockObserver { dnc.removeObserver(unlockObserver) }
-        lockObserver = nil
-        unlockObserver = nil
+        if let lockObs { dnc.removeObserver(lockObs) }
+        if let unlockObs { dnc.removeObserver(unlockObs) }
     }
 
     private func pollDisplayPresence() {
-        guard !removedFired else { return }
+        lock.lock()
+        let alreadyDone = removedFired || stopped
+        lock.unlock()
+        guard !alreadyDone else { return }
         guard !Self.activeDisplayIDs().contains(displayID) else { return }
+        lock.lock()
+        // Re-check under lock; fire the terminal callback at most once.
+        guard !removedFired, !stopped else { lock.unlock(); return }
         removedFired = true
+        lock.unlock()
         onDisplayRemoved()
         stop()
     }

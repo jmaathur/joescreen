@@ -522,23 +522,42 @@ public actor LiveKitTransport: MediaTransport {
 
     /// Republish any live share track whose published codec no longer matches the current structural
     /// codec. Same track/name/sink → the receiver's openOrReplace swaps it in place.
+    ///
+    /// Actor-reentrancy safe: each iteration re-validates that the entry is STILL the one it started
+    /// with after every `await` (a concurrent `unpublishVideoTrack` for the same window sets
+    /// `publishedTracks[windowID] = nil` during the suspension). If the entry was removed or replaced
+    /// mid-flight, the freshly-created publication is unpublished so no orphaned ghost track leaks.
     private func renegotiateForCodecChange() async -> Int {
         let target = codecSelector.current
+        // Snapshot the windowIDs to renegotiate; re-read the live entry inside the loop.
+        let windowIDs = publishedTracks.keys.filter {
+            guard let e = publishedTracks[$0], let c = e.publishedCodec else { return false }
+            return c != target && e.publication != nil
+        }
         var renegotiated = 0
-        for (windowID, entry) in publishedTracks {
-            // Only tracks already published (have a codec + publication) and now mismatched.
-            guard let published = entry.publishedCodec, published != target,
+        for windowID in windowIDs {
+            guard let entry = publishedTracks[windowID], entry.publishedCodec != target,
                   let oldPublication = entry.publication else { continue }
-            // Unpublish the old, republish the SAME LocalVideoTrack with fresh (codec-correct) options.
+            let track = entry.track
+
             try? await room.localParticipant.unpublish(publication: oldPublication)
+            // The window may have been unshared (or already republished) during the unpublish await.
+            guard publishedTracks[windowID]?.track === track else { continue }
+
             publishingWindowID = windowID
             let options = makeVideoPublishOptions()
             publishingWindowID = nil
             do {
-                let newPublication = try await room.localParticipant.publish(videoTrack: entry.track, options: options)
-                publishedTracks[windowID]?.publication = newPublication
-                publishedTracks[windowID]?.publishedCodec = target
-                renegotiated += 1
+                let newPublication = try await room.localParticipant.publish(videoTrack: track, options: options)
+                // Re-validate AFTER the publish await: if the entry vanished/changed, this new
+                // publication is an orphan — unpublish it rather than leak a live ghost track.
+                if publishedTracks[windowID]?.track === track {
+                    publishedTracks[windowID]?.publication = newPublication
+                    publishedTracks[windowID]?.publishedCodec = target
+                    renegotiated += 1
+                } else {
+                    try? await room.localParticipant.unpublish(publication: newPublication)
+                }
             } catch {
                 // Republish failed (disconnected mid-renegotiate). Leave the entry; a later attempt or
                 // teardown handles it. Surface as a state blip.
@@ -549,9 +568,40 @@ public actor LiveKitTransport: MediaTransport {
     }
 
     /// Set the admitted target bitrate (bps) for a window's share track (M11). Applied via
-    /// `screenShareEncoding` at publish; a nil/absent value uses the SDK default.
+    /// `screenShareEncoding` at publish; a nil/absent value uses the SDK default. This alone only
+    /// affects the NEXT publish — to change an ALREADY-LIVE track's bitrate, call
+    /// `republishForBitrateChange` (a degrade must actually lower live tracks to protect the uplink).
     public func setShareBitrate(windowID: WindowID, bps: Double?) {
         shareBitrates[windowID] = bps
+    }
+
+    /// Republish already-live share tracks so a changed `shareBitrate` (a degrade) takes real effect
+    /// on the wire (M11 admission). Same track/name/sink → in-place swap on the receiver; skips
+    /// windows that aren't live or vanished mid-flight (actor-reentrancy safe, like renegotiation).
+    @discardableResult
+    public func republishForBitrateChange(windowIDs: [WindowID]) async -> Int {
+        var count = 0
+        for windowID in windowIDs {
+            guard let entry = publishedTracks[windowID], let oldPublication = entry.publication else { continue }
+            let track = entry.track
+            try? await room.localParticipant.unpublish(publication: oldPublication)
+            guard publishedTracks[windowID]?.track === track else { continue }
+            publishingWindowID = windowID
+            let options = makeVideoPublishOptions()
+            publishingWindowID = nil
+            do {
+                let newPublication = try await room.localParticipant.publish(videoTrack: track, options: options)
+                if publishedTracks[windowID]?.track === track {
+                    publishedTracks[windowID]?.publication = newPublication
+                    count += 1
+                } else {
+                    try? await room.localParticipant.unpublish(publication: newPublication)
+                }
+            } catch {
+                updateState(.failed(reason: "bitrate republish failed: \(String(describing: error))"))
+            }
+        }
+        return count
     }
 
     private func makeVideoPublishOptions() -> VideoPublishOptions {

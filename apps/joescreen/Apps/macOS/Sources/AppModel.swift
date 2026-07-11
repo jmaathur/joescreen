@@ -852,6 +852,10 @@ public final class AppModel {
             let granted = CGRequestScreenCaptureAccess()
             AppLog.info("requested screen capture access → \(granted)")
         }
+        // Encode-session cap is knowable up front — refuse BEFORE touching the codec context so a
+        // capped share never renegotiates live tracks (no VP9→H.264→VP9 flicker).
+        if let refusal = encodeCapRefusal() { shareRefusedReason = refusal; return }
+
         let windowID = WindowID()
         let capture = WindowCaptureService(windowID: windowID)
         localCaptures[windowID] = capture
@@ -907,6 +911,22 @@ public final class AppModel {
         }
     }
 
+    /// The structural encode-session cap check, knowable UP FRONT (before capture/pixels). Gating on
+    /// it before `pushShareContext` means a share refused purely by the cap never renegotiates (and
+    /// then un-renegotiates) live tracks — no flicker. Returns a refusal message if capped, else nil.
+    private func encodeCapRefusal() -> String? {
+        // currentWindowCount = shares already live; the cap refuses when +1 would exceed maxEncodeSessions.
+        let decision = admission.admitShare(
+            existingBitrates: localShareBitrates.values.map { $0 },
+            requestedBitrate: ShareBitratePolicy.floorBps,
+            measuredUplinkBps: .greatestFiniteMagnitude, // ignore bandwidth — only the encode cap here
+            peerCount: participants.count, topology: .sfu)
+        if case .refuseAtCapacity(.encodeSessionCap(let max)) = decision {
+            return Self.refusalMessage(.encodeSessionCap(max: max))
+        }
+        return nil
+    }
+
     /// Run uplink admission for a pending share; on `.degrade` uniformly rescale existing shares'
     /// bitrates; set the admitted bitrate on the transport. Returns false if REFUSED (with a visible
     /// reason set). Screen-content bitrate comes from the source pixel dims via ShareBitratePolicy.
@@ -925,10 +945,17 @@ public final class AppModel {
             shareRefusedReason = nil
             return true
         case .degrade(let perWindow):
-            // Uniformly rescale EVERY share (existing + new) to the common fitting bitrate.
+            // Uniformly rescale EVERY share (existing + new) to the common fitting bitrate. The new
+            // share picks it up at publish; ALREADY-LIVE shares whose bitrate dropped must be
+            // republished so the degrade actually protects the uplink (setShareBitrate alone only
+            // affects the next publish).
+            let liveWindowsToRepublish = localShareBitrates.keys.filter { $0 != windowID && localShareBitrates[$0] != perWindow }
             localShareBitrates[windowID] = perWindow
             for id in localShareBitrates.keys { localShareBitrates[id] = perWindow }
             for id in localShareBitrates.keys { await transport.setShareBitrate(windowID: id, bps: perWindow) }
+            if !liveWindowsToRepublish.isEmpty {
+                await transport.republishForBitrateChange(windowIDs: Array(liveWindowsToRepublish))
+            }
             shareRefusedReason = nil
             return true
         case .refuseAtCapacity(let reason):
@@ -970,6 +997,8 @@ public final class AppModel {
             shareRefusedReason = "You can share only one screen at a time. Stop the current screen share first."
             return
         }
+        // Encode-cap refusal up front (before the codec context flips live tracks → no flicker).
+        if let refusal = encodeCapRefusal() { shareRefusedReason = refusal; return }
         let hasAccess = CGPreflightScreenCaptureAccess()
         AppLog.info("startSharingDisplay displayID=\(displayID) screenCaptureAccess=\(hasAccess)")
         if !hasAccess { _ = CGRequestScreenCaptureAccess() }
