@@ -118,10 +118,19 @@ public final class AppModel {
         catch { fail("token: \(error)"); return }
         #endif
 
-        // Install the remote-track hook BEFORE connecting so we don't miss early subscriptions.
-        await transport.setOnTrackSubscribed { [weak self] trackName, track in
-            guard let windowID = LiveKitTransport.windowID(fromTrackName: trackName) else { return }
-            Task { @MainActor in self?.addRemoteWindow(windowID: windowID, track: track) }
+        // Install the unified remote-track hook BEFORE connecting so we don't miss early
+        // subscriptions. The descriptor carries the resolved ownerID (correct owner attribution at
+        // subscribe time — no windowID fallback) and sourceKind (M10 camera routing).
+        await transport.setOnRemoteTrack { [weak self] descriptor, track in
+            guard let windowID = ShareTrackName.windowID(from: descriptor.trackName) else { return }
+            let owner = descriptor.ownerID
+            Task { @MainActor in self?.addRemoteWindow(windowID: windowID, ownerHint: owner, track: track) }
+        }
+        // Install the track-gone hook: a sharer that stops/crashes/disconnects fires this, and we
+        // close + purge the corresponding viewer window (fixes the frozen-ghost leak).
+        await transport.setOnTrackGone { [weak self] gone in
+            guard let windowID = ShareTrackName.windowID(from: gone.trackName) else { return }
+            Task { @MainActor in self?.handleRemoteTrackGone(windowID: windowID) }
         }
 
         // Install the participant-roster hook BEFORE connecting so early joiners aren't missed. This
@@ -295,9 +304,16 @@ public final class AppModel {
 
     // MARK: - Remote windows
 
-    private func addRemoteWindow(windowID: WindowID, track: JoeScreenLiveKit.RemoteVideoTrackRef) {
+    private func addRemoteWindow(windowID: WindowID, ownerHint: ParticipantID?,
+                                 track: JoeScreenLiveKit.RemoteVideoTrackRef) {
+        // A duplicate subscribe for a window we already show is a no-op — never open a second window.
+        // (The reopen/replace-in-place path lands in M9.7 with the lifecycle reducer.)
+        guard remoteWindows[windowID] == nil else { return }
         AppLog.info("remote track subscribed → opening native window for \(windowID)")
-        let owner = room.owner(of: windowID) ?? windowID // fallback owner id for coloring
+        // Owner attribution priority: authoritative snapshot > the descriptor's resolved identity >
+        // the windowID (last-ditch, repaired later by applyRoom). The descriptor hint fixes the
+        // subscribe-before-snapshot case that used to color/title the window wrong forever.
+        let owner = room.owner(of: windowID) ?? ownerHint ?? windowID
         let win = RemoteVideoWindow(windowID: windowID, ownerID: owner, track: track)
         remoteWindows[windowID] = win
         // The track owner is definitely present; ensure they're in the roster even if the
@@ -305,6 +321,14 @@ public final class AppModel {
         transportParticipants.insert(owner)
         recomputeRoster()
         windowManager.open(win)
+    }
+
+    /// A remote sharer's track went away (stop/crash/disconnect). Close + purge its viewer window.
+    private func handleRemoteTrackGone(windowID: WindowID) {
+        guard remoteWindows[windowID] != nil else { return }
+        AppLog.info("remote track gone → closing viewer window for \(windowID)")
+        remoteWindows[windowID] = nil
+        windowManager.close(windowID)
     }
 
     private func removeRemoteWindowIfForeign(_ windowID: WindowID) {

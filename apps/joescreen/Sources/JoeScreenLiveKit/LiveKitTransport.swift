@@ -52,11 +52,39 @@ public actor LiveKitTransport: MediaTransport {
     /// SYNCHRONOUS `connectionStates()` protocol requirement can be satisfied `nonisolated`.
     private let stateBroadcaster = ConnectionStateBroadcaster()
 
-    /// Remote video tracks by track name (for receiver-side rendering hooks, M2 test + M4 UI).
-    private var remoteVideoTracks: [String: RemoteVideoTrack] = [:]
-    /// Optional renderer factory: given a track name + track, produce/attach a renderer. Set by the
-    /// app (M4) or a test (M2) to observe received frames. Nil = no rendering side effects.
-    private var onTrackSubscribed: (@Sendable (String, RemoteVideoTrack) -> Void)?
+    /// One subscribed remote video track + its descriptor, keyed by the stable track **SID** (NOT
+    /// name — LiveKit names every camera track `"camera"`, so a name key would overwrite one webcam
+    /// with another; latent bug #1). The descriptor carries name/sourceKind/ownerID for routing.
+    private struct SubscribedTrack {
+        let track: RemoteVideoTrack
+        let descriptor: RemoteTrackDescriptor
+        /// Per-track dimension observer, retained here (the SDK holds delegates weakly).
+        var dimensionObserver: TrackDimensionObserver?
+    }
+    private var remoteVideoTracks: [String: SubscribedTrack] = [:]
+
+    /// The unified remote-track hook (the design panel's superset contract): given a descriptor +
+    /// the LiveKit track, route/render it. Set by the app (M4/M9/M10) or a test (M2). Nil = no side
+    /// effects. Idempotent; last writer wins; fires once per already-subscribed track on install.
+    private var onRemoteTrack: (@Sendable (RemoteTrackDescriptor, RemoteVideoTrack) -> Void)?
+
+    /// The unified track-gone hook, fired from BOTH unsubscribe AND unpublish (deduped). The app
+    /// closes/purges the corresponding viewer window (fixes the frozen-ghost leak).
+    private var onTrackGone: (@Sendable (RemoteTrackGone) -> Void)?
+
+    /// Optional hook fired with a subscribed track's pixel dimensions (seeded at subscribe, then on
+    /// each `didUpdateDimensions`). The app uses it to keep a viewer window aspect-true. (width, height.)
+    private var onTrackDimensions: (@Sendable (RemoteTrackDescriptor, Int, Int) -> Void)?
+
+    /// SIDs we've already reported gone this session, so the unsubscribe→unpublish pair fires once.
+    private var reportedGone: Set<String> = []
+    /// SIDs we unsubscribed OURSELVES (a user-close / soft-hide), so the resulting delegate callback
+    /// is suppressed — that's a self-inflicted event, not a sharer disappearing.
+    private var locallyUnsubscribed: Set<String> = []
+
+    /// windowID → the SID of its currently-subscribed share track, so `setWindowTrackSubscribed`
+    /// and dimension updates can find the publication by window without re-deriving from names.
+    private var windowTrackSIDs: [WindowID: String] = [:]
 
     /// Optional hook fired whenever the participant set changes (someone connects/disconnects, or a
     /// (re)connection re-seeds the roster). Carries the CURRENT full set of participant IDs (remote +
@@ -74,12 +102,49 @@ public actor LiveKitTransport: MediaTransport {
         self.room = room
     }
 
-    /// Install a hook invoked whenever a remote video track is subscribed (M2 test observes frames;
-    /// M4 app attaches a SwiftUIVideoView / renderer). Idempotent; last writer wins.
-    public func setOnTrackSubscribed(_ handler: @escaping @Sendable (String, RemoteVideoTrack) -> Void) {
-        self.onTrackSubscribed = handler
-        // Fire for any already-subscribed tracks so a late observer doesn't miss them.
-        for (name, track) in remoteVideoTracks { handler(name, track) }
+    /// Install the unified remote-track hook (descriptor + track). Idempotent; last writer wins.
+    /// Fires once for every already-subscribed track so a late observer isn't missed.
+    public func setOnRemoteTrack(_ handler: @escaping @Sendable (RemoteTrackDescriptor, RemoteVideoTrack) -> Void) {
+        self.onRemoteTrack = handler
+        for entry in remoteVideoTracks.values { handler(entry.descriptor, entry.track) }
+    }
+
+    /// Install the unified track-gone hook (fired from unsubscribe + unpublish, deduped).
+    public func setOnTrackGone(_ handler: @escaping @Sendable (RemoteTrackGone) -> Void) {
+        self.onTrackGone = handler
+    }
+
+    /// Install the dimensions hook (width, height pixels, per subscribed track).
+    public func setOnTrackDimensions(_ handler: @escaping @Sendable (RemoteTrackDescriptor, Int, Int) -> Void) {
+        self.onTrackDimensions = handler
+    }
+
+    /// Hard subscribe/unsubscribe a window's share track at the SFU (`set(subscribed:)`) — zero
+    /// downlink when off. Used for user-close (off) and reopen (on). NEVER `set(enabled:)` (throws
+    /// under adaptiveStream — R24). Marks the SID `locallyUnsubscribed` BEFORE the call so the
+    /// resulting delegate callback is recognized as self-inflicted, not a sharer disappearing.
+    public func setWindowTrackSubscribed(windowID: WindowID, _ subscribed: Bool) async {
+        guard let sid = windowTrackSIDs[windowID],
+              let publication = remoteTrackPublication(forSID: sid) else { return }
+        if !subscribed { locallyUnsubscribed.insert(sid) } else { locallyUnsubscribed.remove(sid) }
+        // A failed toggle is non-fatal: adaptiveStream + renderer detach already govern downlink, and
+        // the lifecycle reducer drives the visible state. If it threw, undo the self-suppress mark so
+        // a genuine later gone still fires.
+        do { try await publication.set(subscribed: subscribed) }
+        catch { if !subscribed { locallyUnsubscribed.remove(sid) } }
+    }
+
+    /// Find the remote publication for a SID by scanning the room's remote participants. Publications
+    /// aren't indexed by SID publicly, so this linear scan (few participants × few tracks) is fine.
+    private func remoteTrackPublication(forSID sid: String) -> RemoteTrackPublication? {
+        for participant in room.remoteParticipants.values {
+            for pub in participant.trackPublications.values {
+                if pub.sid.stringValue == sid, let remote = pub as? RemoteTrackPublication {
+                    return remote
+                }
+            }
+        }
+        return nil
     }
 
     /// Install a hook fired whenever the participant set changes. Fires ONCE immediately with the
@@ -146,6 +211,9 @@ public actor LiveKitTransport: MediaTransport {
         publishedTracks.removeAll()
         cameraPublication = nil
         remoteVideoTracks.removeAll()
+        reportedGone.removeAll()
+        locallyUnsubscribed.removeAll()
+        windowTrackSIDs.removeAll()
         if let observer { room.remove(delegate: observer) }
         observer = nil
         updateState(.disconnected)
@@ -391,14 +459,92 @@ public actor LiveKitTransport: MediaTransport {
         onParticipantsChanged?(currentParticipantIDs())
     }
 
-    func handleTrackSubscribed(identity: String?, trackName: String, videoTrack: RemoteVideoTrack?) {
+    func handleTrackSubscribed(
+        identity: String?,
+        trackSID: String,
+        trackName: String,
+        sourceKind: RemoteTrackSourceKind,
+        seedDimensions: Dimensions?,
+        videoTrack: RemoteVideoTrack?
+    ) {
         guard let videoTrack else { return }
-        remoteVideoTracks[trackName] = videoTrack
-        onTrackSubscribed?(trackName, videoTrack)
+        let ownerID = identity.flatMap { participantID(forIdentity: $0) }
+        let descriptor = RemoteTrackDescriptor(
+            trackSID: trackSID, trackName: trackName, sourceKind: sourceKind, ownerID: ownerID)
+
+        // A re-subscribe of the same SID clears any stale gone/local-unsubscribe marks.
+        reportedGone.remove(trackSID)
+        locallyUnsubscribed.remove(trackSID)
+
+        // Attach a per-track dimension observer (weak in the SDK — we retain it). Seed the current
+        // dimensions so the app can aspect-size the window before the first didUpdateDimensions.
+        let observer = TrackDimensionObserver(trackSID: trackSID) { [weak self] sid, dims in
+            Task { [weak self] in await self?.handleTrackDimensions(trackSID: sid, dimensions: dims) }
+        }
+        videoTrack.add(delegate: observer)
+
+        remoteVideoTracks[trackSID] = SubscribedTrack(
+            track: videoTrack, descriptor: descriptor, dimensionObserver: observer)
+        if let windowID = ShareTrackName.windowID(from: trackName) {
+            windowTrackSIDs[windowID] = trackSID
+        }
+
+        onRemoteTrack?(descriptor, videoTrack)
+        // Deliver the seed dimensions immediately if the SDK already knows them at subscribe.
+        if let seedDimensions {
+            handleTrackDimensions(trackSID: trackSID, dimensions: seedDimensions)
+        }
     }
 
-    func handleTrackUnsubscribed(trackName: String) {
-        remoteVideoTracks[trackName] = nil
+    /// Delegate callback source: the SDK's unsubscribe. Report gone (deduped, self-suppressed).
+    func handleTrackUnsubscribed(trackSID: String) {
+        reportGone(trackSID: trackSID)
+    }
+
+    /// Delegate callback source: the SDK's unpublish (the sharer stopped/crashed). Report gone. Only
+    /// hooking unsubscribe would leak: a locally-unsubscribed track fires ONLY unpublish on a later
+    /// sharer crash (verified) — so both paths funnel here.
+    func handleTrackUnpublished(trackSID: String) {
+        reportGone(trackSID: trackSID)
+    }
+
+    /// Dimension updates for a subscribed track (seeded at subscribe, then on didUpdateDimensions).
+    /// Currently surfaced via the descriptor's ownerID/name so the app can re-aspect the window; the
+    /// dimensions themselves reach the app through the ShareInfo re-broadcast on the sharer side and
+    /// the renderer's own layout, so this hook exists for future explicit dimension push (M9 app).
+    func handleTrackDimensions(trackSID: String, dimensions: Dimensions?) {
+        guard remoteVideoTracks[trackSID] != nil, let dimensions,
+              let handler = onTrackDimensions else { return }
+        let entry = remoteVideoTracks[trackSID]!
+        handler(entry.descriptor, Int(dimensions.width), Int(dimensions.height))
+    }
+
+    /// Fire the gone hook exactly once per SID, suppressing self-inflicted unsubscribes.
+    private func reportGone(trackSID: String) {
+        // A soft/hard local unsubscribe is not "the sharer disappeared" — swallow it (but do drop
+        // the registry entry so a later real gone still resolves cleanly).
+        if locallyUnsubscribed.contains(trackSID) {
+            // Keep the entry: a soft unsubscribe (renderer detach) may resubscribe the same SID; a
+            // hard user-close removed the window already. Either way, not a gone event.
+            return
+        }
+        guard !reportedGone.contains(trackSID) else { return }
+        reportedGone.insert(trackSID)
+        guard let entry = remoteVideoTracks[trackSID] else {
+            // Never saw the subscribe (or already purged). Nothing to report against.
+            return
+        }
+        let gone = RemoteTrackGone(
+            trackSID: trackSID,
+            trackName: entry.descriptor.trackName,
+            sourceKind: entry.descriptor.sourceKind,
+            ownerID: entry.descriptor.ownerID)
+        remoteVideoTracks[trackSID] = nil
+        if let windowID = ShareTrackName.windowID(from: gone.trackName),
+           windowTrackSIDs[windowID] == trackSID {
+            windowTrackSIDs[windowID] = nil
+        }
+        onTrackGone?(gone)
     }
 
     func handleData(_ data: Data, topic: String) {
@@ -414,15 +560,17 @@ public actor LiveKitTransport: MediaTransport {
         stateBroadcaster.emit(state)
     }
 
-    /// Track naming convention: `window:<windowID uuid>` (§3). Receivers parse the window back out.
+    /// Track naming convention: `window:<windowID uuid>` (§3). Delegates to the single `ShareTrackName`
+    /// contract so window-share naming has exactly one implementation (byte-identical output).
     public static func trackName(for windowID: WindowID) -> String {
-        "window:\(windowID.uuidString)"
+        ShareTrackName.encode(kind: .window, windowID: windowID)
     }
 
-    /// Parse a window ID out of a track name produced by `trackName(for:)`; nil if it isn't one.
+    /// Parse a window ID out of a WINDOW-share track name; nil for camera/display/garbage. Retained
+    /// for the existing window-only call sites (iOS viewer); delegates to `ShareTrackName`.
     public static func windowID(fromTrackName name: String) -> WindowID? {
-        guard name.hasPrefix("window:") else { return nil }
-        return UUID(uuidString: String(name.dropFirst("window:".count)))
+        guard let parsed = ShareTrackName.decode(name), parsed.kind == .window else { return nil }
+        return parsed.windowID
     }
 
     public enum TransportError: Error, Equatable {

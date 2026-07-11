@@ -48,17 +48,33 @@ final class LiveKitRoomObserver: NSObject, RoomDelegate, Sendable {
               didSubscribeTrack publication: RemoteTrackPublication) {
         let identity = participant.identity?.stringValue
         let name = publication.name
+        let sid = publication.sid.stringValue
+        let sourceKind = RemoteTrackSourceKind(publication.source)
+        // Seed dimensions the SDK already knows at subscribe (so the app can aspect-size a window
+        // before the first didUpdateDimensions callback).
+        let dims = publication.dimensions
         // Capture the track reference now; the actor attaches a renderer if it's a video track.
         let videoTrack = publication.track as? RemoteVideoTrack
         Task { [weak transport] in
-            await transport?.handleTrackSubscribed(identity: identity, trackName: name, videoTrack: videoTrack)
+            await transport?.handleTrackSubscribed(
+                identity: identity, trackSID: sid, trackName: name,
+                sourceKind: sourceKind, seedDimensions: dims, videoTrack: videoTrack)
         }
     }
 
     func room(_ room: Room, participant: RemoteParticipant,
               didUnsubscribeTrack publication: RemoteTrackPublication) {
-        let name = publication.name
-        Task { [weak transport] in await transport?.handleTrackUnsubscribed(trackName: name) }
+        let sid = publication.sid.stringValue
+        Task { [weak transport] in await transport?.handleTrackUnsubscribed(trackSID: sid) }
+    }
+
+    /// A remote sharer UNPUBLISHED (stopped sharing, or crashed/disconnected). Hooking this in
+    /// addition to `didUnsubscribeTrack` closes the leak where a locally-unsubscribed track fires
+    /// ONLY unpublish on a later crash — the transport dedupes the pair.
+    func room(_ room: Room, participant: RemoteParticipant,
+              didUnpublishTrack publication: RemoteTrackPublication) {
+        let sid = publication.sid.stringValue
+        Task { [weak transport] in await transport?.handleTrackUnpublished(trackSID: sid) }
     }
 
     // MARK: - Data

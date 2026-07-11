@@ -45,8 +45,8 @@ final class LiveKitIntegrationTests: XCTestCase {
 
         // Receiver B installs a frame-counting renderer BEFORE A publishes.
         let received = FrameCountBox()
-        await transportB.setOnTrackSubscribed { name, track in
-            let renderer = CountingRenderer(box: received, trackName: name)
+        await transportB.setOnRemoteTrack { descriptor, track in
+            let renderer = CountingRenderer(box: received, trackName: descriptor.trackName)
             track.add(videoRenderer: renderer)
             received.retain(renderer) // keep it alive for the test duration
         }

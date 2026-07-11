@@ -51,8 +51,10 @@ public final class ViewerModel {
         catch { phase = .failed("token: \(error)"); return }
         #endif
 
-        await transport.setOnTrackSubscribed { [weak self] trackName, track in
-            guard let windowID = LiveKitTransport.windowID(fromTrackName: trackName) else { return }
+        await transport.setOnRemoteTrack { [weak self] descriptor, track in
+            // iOS is a viewer of WINDOW shares (+ M11 display shares); camera tiles are macOS-only
+            // for now. ShareTrackName parses window:/display: names and ignores camera/garbage.
+            guard let windowID = ShareTrackName.windowID(from: descriptor.trackName) else { return }
             Task { @MainActor in self?.addRemoteTrack(windowID: windowID, track: track) }
         }
         startConnectionPump()
