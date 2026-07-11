@@ -24,7 +24,7 @@
 	},
 	// KV: slug → { room, sfu } directory. Create with:  wrangler kv namespace create ROOMS
 	"kv_namespaces": [
-		{ "binding": "ROOMS", "id": "REPLACE_WITH_KV_ID" }
+		{ "binding": "ROOMS", "id": "d722a68c52b84bc68a7fd34e10f8bb46" }
 	],
 	// Secrets (set via `wrangler secret put --env production`):
 	//   LIVEKIT_API_KEY, LIVEKIT_API_SECRET — for the RoomService presence Twirp call (HS256 JWT).
@@ -41,7 +41,7 @@
 				"DOWNLOAD_URL": "https://joescreen.cheffing.dev"
 			},
 			"kv_namespaces": [
-				{ "binding": "ROOMS", "id": "REPLACE_WITH_KV_ID" }
+				{ "binding": "ROOMS", "id": "d722a68c52b84bc68a7fd34e10f8bb46" }
 			]
 		}
 	}
