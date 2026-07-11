@@ -42,3 +42,8 @@ TEAM_ID.local
 # Cloudflare env — real files gitignored, .example templates committed.
 .env.local
 .env.production
+
+# Locally-built Go token-server binary (built in Docker for deploy)
+apps/livekit/token-server/token-server
+apps/joescreen/build-rel/
+apps/joescreen/build/

@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JoeScreen — CoScreen Parity Session Summary</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --panel: #f7f8fa;
+    --panel-2: #eef1f5;
+    --ink: #1b1f24;
+    --muted: #5a6472;
+    --line: #e2e6ec;
+    --accent: #2563eb;
+    --green: #16a34a;
+    --amber: #d97706;
+    --red: #dc2626;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel-2: #1c232d;
+      --ink: #e6edf3;
+      --muted: #9aa7b4;
+      --line: #2a323c;
+      --accent: #589bff;
+      --green: #3fb950;
+      --amber: #e3a008;
+      --red: #f85149;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.6 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 60rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+  header.hero {
+    border: 1px solid var(--line); border-radius: 14px; padding: 1.75rem 1.75rem 1.5rem;
+    background: linear-gradient(180deg, var(--panel), var(--bg));
+  }
+  .kicker { color: var(--accent); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; font-size: .78rem; }
+  h1 { font-size: clamp(1.7rem, 4vw, 2.3rem); margin: .35rem 0 .5rem; line-height: 1.15; }
+  .sub { color: var(--muted); margin: 0; }
+  .meta { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.1rem; }
+  .chip {
+    font: 600 .8rem/1 var(--mono); color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line);
+    padding: .45rem .6rem; border-radius: 999px; white-space: nowrap;
+  }
+  .chip b { color: var(--green); }
+  h2 { font-size: 1.35rem; margin: 2.5rem 0 .3rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1.08rem; margin: 1.6rem 0 .3rem; }
+  p { margin: .55rem 0; }
+  .lead { color: var(--muted); }
+  a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: .88em; background: var(--panel-2); padding: .1em .35em; border-radius: 5px; }
+  ul { margin: .4rem 0 .8rem; padding-left: 1.25rem; }
+  li { margin: .28rem 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: .9rem; margin: 1rem 0; }
+  .card { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 1rem 1.1rem; }
+  .card h3 { margin-top: 0; display: flex; align-items: baseline; gap: .5rem; }
+  .tag { font: 700 .68rem/1 var(--mono); text-transform: uppercase; letter-spacing: .04em; padding: .28em .5em; border-radius: 6px; }
+  .tag.m { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+  .tag.b { background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--green); }
+  .stat { font: 800 1.9rem/1 var(--mono); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .8rem; margin: 1.1rem 0; }
+  .stat-box { border: 1px solid var(--line); border-radius: 12px; padding: 1rem; text-align: center; background: var(--panel); }
+  .stat-box .lbl { color: var(--muted); font-size: .82rem; margin-top: .25rem; }
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; margin: 1rem 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 34rem; font-size: .92rem; }
+  th, td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--panel-2); font-weight: 700; }
+  tr:last-child td { border-bottom: 0; }
+  td.mono, th.mono { font-family: var(--mono); font-size: .84rem; white-space: nowrap; }
+  .ok { color: var(--green); font-weight: 700; }
+  .pend { color: var(--amber); font-weight: 700; }
+  .callout {
+    border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    background: var(--panel); border-radius: 0 10px 10px 0; padding: .9rem 1.1rem; margin: 1.2rem 0;
+  }
+  .callout.warn { border-left-color: var(--amber); }
+  .callout.good { border-left-color: var(--green); }
+  .commit-list { font-family: var(--mono); font-size: .82rem; line-height: 1.75; }
+  .commit-list .sha { color: var(--accent); }
+  details { border: 1px solid var(--line); border-radius: 10px; margin: .8rem 0; background: var(--panel); }
+  summary { cursor: pointer; padding: .8rem 1rem; font-weight: 600; }
+  details[open] summary { border-bottom: 1px solid var(--line); }
+  details .body { padding: .6rem 1rem 1rem; }
+  footer { margin-top: 3rem; color: var(--muted); font-size: .85rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+  .num { color: var(--muted); font-family: var(--mono); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">JoeScreen · CoScreen parity</div>
+    <h1>Autonomous implementation session — what shipped</h1>
+    <p class="sub">Executed the CoScreen parity plan end-to-end: milestones <b>M9 → M10 → M11</b>, then the
+    full post-core backlog <b>(#1–#12)</b>. Every machine-verifiable unit landed; every human-gated
+    slice was deferred to the ledger, never faked.</p>
+    <div class="meta">
+      <span class="chip">34 commits</span>
+      <span class="chip">73fcf67 → 6f2667e</span>
+      <span class="chip"><b>330</b> Swift tests · 0 failures</span>
+      <span class="chip">107 files · +23,050 / −282</span>
+      <span class="chip">2026-07-10</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>At a glance</h2>
+    <div class="stats">
+      <div class="stat-box"><div class="stat">330</div><div class="lbl">Swift tests passing (was 120)</div></div>
+      <div class="stat-box"><div class="stat">+210</div><div class="lbl">new Tier-1 unit tests</div></div>
+      <div class="stat-box"><div class="stat">20</div><div class="lbl">new pure JoeScreenKit seams</div></div>
+      <div class="stat-box"><div class="stat">6</div><div class="lbl">review-caught defects fixed</div></div>
+      <div class="stat-box"><div class="stat">12/0</div><div class="lbl">live-SFU integration tests</div></div>
+      <div class="stat-box"><div class="stat">3</div><div class="lbl">apps built (macOS, iOS, Worker)</div></div>
+    </div>
+    <div class="callout good">
+      <strong>Final machine gate — all green.</strong> <code>swift build &amp;&amp; swift test</code> → 330 tests,
+      7 skipped, 0 failures · <code>xcodebuild</code> JoeScreen-macOS <em>and</em> JoeScreen-iOS → BUILD
+      SUCCEEDED (app launches) · LiveKit integration suite vs a live SFU → 12/0 · the
+      <code>joescreen-rooms</code> Cloudflare Worker → 15 vitest tests + tsc clean + local wrangler smoke ·
+      the Go token server → <code>go build</code> clean.
+    </div>
+  </section>
+
+  <section>
+    <h2>The three headline asks</h2>
+    <p class="lead">The parity plan targeted CoScreen's core experience. Before this session, two of the
+    three were missing and the third had correctness bugs that made it feel broken in real sessions.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Ask</th><th>Before</th><th>After this session</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Everyone's webcam in tiles</td>
+            <td>Missing — remote camera tracks subscribed then silently dropped</td>
+            <td><span class="ok">Landed (M10)</span> — participant tile strip with live cameras, avatars, mic/speaking state, decode budget</td>
+          </tr>
+          <tr>
+            <td>Share a window <em>or</em> the whole screen</td>
+            <td>Missing — window-only; <code>wholeDisplay</code> was always <code>false</code></td>
+            <td><span class="ok">Landed (M11)</span> — display picker, <code>DisplayCaptureService</code>, <code>display:</code> naming, D5 codec renegotiation</td>
+          </tr>
+          <tr>
+            <td>Every remote share a movable native window</td>
+            <td>Worked, but with dead-window / cursor-drift / wrong-owner bugs</td>
+            <td><span class="ok">Production-grade (M9)</span> — pure lifecycle reducer kills every dead-window/desync bug class</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Core milestones</h2>
+
+    <div class="card" style="margin-top:1rem">
+      <h3><span class="tag m">M9</span> Receive-side lifecycle correctness + share metadata</h3>
+      <p>Made movable window shares production-grade and landed the shared contracts M10/M11 build on.</p>
+      <ul>
+        <li><strong>Pure <code>RemoteWindowLifecycle</code> reducer</strong> — turns every dead-window / desync bug class into an enumerable transition; <code>AppModel</code> just executes effects.</li>
+        <li>SID-keyed transport registry (fixes latent bug #1: two <code>"camera"</code> tracks no longer overwrite each other).</li>
+        <li><code>trackGone</code> fired from <em>both</em> unsubscribe and unpublish, with "unpublish is authoritative" — the frozen-ghost fix.</li>
+        <li>Owner repair (latent #5); aspect-true windows + cursor letterbox mapping via <code>VideoFitMath</code>; <code>WindowResizeWatcher</code>; <code>ShareInfo</code>.</li>
+      </ul>
+    </div>
+
+    <div class="card" style="margin-top:1rem">
+      <h3><span class="tag m">M10</span> Participant video tile strip</h3>
+      <p>The "see everyone" ask.</p>
+      <ul>
+        <li>Pure <code>TrackClassifier</code> routing; display names via the JWT <code>name</code> claim (SFU-distributed to late joiners, zero wire surface).</li>
+        <li><code>ParticipantMediaReducer</code> — mic/camera state reads <code>publication.isMuted</code>, never track subscription (a muted camera would otherwise render a frozen frame).</li>
+        <li>The tile strip + live share thumbnails (a second renderer on the held track); decode budget with shares taking priority.</li>
+        <li><strong>Adversarial review caught 2 real R24/R32 bandwidth bugs</strong> — the thumbnail defeating soft-hide, and the decode budget over-counting closed windows. Both fixed.</li>
+      </ul>
+    </div>
+
+    <div class="card" style="margin-top:1rem">
+      <h3><span class="tag m">M11</span> Share the whole screen (display share)</h3>
+      <ul>
+        <li>D5-structural codec-ordering fix (latent #3) via the pure <code>ShareContext</code>; admission revival (dead code #4) with <code>ShareBitratePolicy</code>.</li>
+        <li>Display picker + macOS-14-floor <code>DisplayPickResolver</code>; <code>DisplayCaptureService</code> (hall-of-mirrors filter, screen-lock pause, display-unplug).</li>
+        <li><code>display:</code> naming; structural VP9↔H.264 renegotiation (in-place swap, no flicker); one-display-per-sharer; <code>ShareBorderOverlay</code>.</li>
+        <li><strong>Adversarial review caught 4 defects incl. 2 high-severity actor-reentrancy races</strong> (a data race in the display-lifecycle watcher, a stale-entry republish leak). All fixed.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Post-core backlog (#1–#12)</h2>
+    <p class="lead">Delivered in the plan's ranked order — each item's full machine-verifiable scope, deferring only its human-gated slice.</p>
+    <div class="grid">
+      <div class="card"><h3><span class="tag b">#1</span> Remote control (F4)</h3><p>Planner, injector (strategy switch, safe default), secure-input detector, pump, owner consent UI. Ships with control <em>off</em> by default.</p></div>
+      <div class="card"><h3><span class="tag b">#2</span> Audio niceties</h3><p>Join-muted preference; speaking rings ride M10's state hook.</p></div>
+      <div class="card"><h3><span class="tag b">#3</span> Clipboard (F6)</h3><p>changeCount poller + pump; session-scoped, default OFF, never persisted.</p></div>
+      <div class="card"><h3><span class="tag b">#4</span> Isolation blocklist</h3><p><code>SensitiveAppPolicy</code> — password managers/Keychain never captured (picker + capture-start).</p></div>
+      <div class="card"><h3><span class="tag b">#5</span> Menu-bar residency</h3><p><code>MenuBarExtra</code> + app delegate; <code>RecentsStore</code>, copy invite link, mic/share/leave.</p></div>
+      <div class="card"><h3><span class="tag b">#6</span> Multi-user control</h3><p>Display-only <code>controllerByWindow</code> mirror; authorization never reads it (D12).</p></div>
+      <div class="card"><h3><span class="tag b">#7</span> Rooms + invite links</h3><p>New <code>joescreen-rooms</code> Cloudflare Worker: KV slugs, OpenGraph invite page, presence-lite.</p></div>
+      <div class="card"><h3><span class="tag b">#8</span> Browser view-only join</h3><p>Worker-minted subscribe-only token + a livekit-client watch page.</p></div>
+      <div class="card"><h3><span class="tag b">#9</span> Draw / annotation (F9)</h3><p>DrawPump on the draw channel; SwiftUI Canvas ink overlay; per-author undo/clear; late-joiner ink snapshot.</p></div>
+      <div class="card"><h3><span class="tag b">#10</span> Hover "Share" tab</h3><p>Pure <code>WindowHitTester</code> + floating panel; spike-gated (R4-safe picker default).</p></div>
+      <div class="card"><h3><span class="tag b">#11</span> Slack deep-link lite</h3><p>Covered by #5 (copy link) + #7 (OpenGraph unfurl).</p></div>
+      <div class="card"><h3><span class="tag b">#12</span> Terminal (F12)</h3><p>Pure <code>WriterArbiter</code> arbitration seam; PTY host + SwiftTerm deferred to the spike.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>New pure logic seams (JoeScreenKit)</h2>
+    <p class="lead">Every feature landed as a framework-free, unit-tested seam so the app-layer glue stays thin
+    and correctness is machine-verifiable without hardware, a network, or a second Mac. 20 new seams this session:</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th class="mono">Seam</th><th>What it decides</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">RemoteWindowLifecycle</td><td>Per-window state machine (open/closed/hidden/stale/gone) + effects</td></tr>
+          <tr><td class="mono">VideoFitMath</td><td>Letterbox content rect + normalized↔view mapping (cursor-drift fix)</td></tr>
+          <tr><td class="mono">WindowCascade / ResizeStabilizer</td><td>Deterministic window placement; resize jitter suppression</td></tr>
+          <tr><td class="mono">ShareTrackName / ShareInfo / ShareContext</td><td>Track naming, share metadata, structural D5 codec context</td></tr>
+          <tr><td class="mono">TrackClassifier / TileSubscriptionPlanner</td><td>Window-vs-camera routing; tile order + decode budget</td></tr>
+          <tr><td class="mono">ParticipantMediaState</td><td>Name/speaking/mic/camera reduction (mute reads isMuted)</td></tr>
+          <tr><td class="mono">DisplayResolutionPolicy / DisplayPickResolver</td><td>Display capture size cap; macOS-14 picker resolution</td></tr>
+          <tr><td class="mono">ShareBitratePolicy</td><td>Per-share target bitrate (feeds admission)</td></tr>
+          <tr><td class="mono">SensitiveAppPolicy</td><td>Never-share blocklist (password managers/Keychain)</td></tr>
+          <tr><td class="mono">RecentsStore</td><td>Bounded, deduped recent-sessions list</td></tr>
+          <tr><td class="mono">InputEventPlanner / SecureInputBanner</td><td>Intent → event sequence; R8 secure-input decision</td></tr>
+          <tr><td class="mono">WindowHitTester</td><td>Z-order/pid/layer hover-tab resolution</td></tr>
+          <tr><td class="mono">DrawAuthorSequencer / WriterArbiter</td><td>Draw monotonic seq; single-writer terminal arbitration</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Adversarial review paid off</h2>
+    <div class="callout warn">
+      Before each milestone commit, 3+ reviewers with distinct lenses (Swift-6 concurrency, wire
+      back-compat, R24/R32 subscription correctness) audited the diff, then each finding was
+      adversarially verified. This surfaced <strong>6 confirmed defects</strong> — mostly concurrency
+      correctness bugs that unit tests alone would never have caught:
+      <ul style="margin-bottom:0">
+        <li>M10: share thumbnail's second renderer defeated the soft-hide (kept the SFU forwarding).</li>
+        <li>M10: decode budget counted user-closed (zero-decode) windows, starving camera tiles.</li>
+        <li>M11: a display-lifecycle watcher claimed <code>@unchecked Sendable</code> with no lock — a real data race on teardown.</li>
+        <li>M11: codec renegotiation republished a stale entry if the window was concurrently unshared — an orphaned live "ghost" track.</li>
+        <li>M11: admission <code>.degrade</code> never lowered already-live tracks' bitrates.</li>
+        <li>M11: a share refused by the encode cap flickered a live window through H.264 and back.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Hard constraints honored</h2>
+    <ul>
+      <li><strong>R22</strong> one-libwebrtc — only <code>JoeScreenLiveKit</code> links LiveKit; JoeScreenKit stayed LiveKit- and CoreMedia-free.</li>
+      <li><strong>R24 / R32</strong> — adaptiveStream+dynacast kept on; never <code>set(enabled:)</code>; renderers report adaptive-stream size.</li>
+      <li><strong>D5</strong> — VP9 for a single window, H.264 for ≥2 windows or any display, enforced structurally via <code>ShareContext</code>.</li>
+      <li><strong>D12</strong> — input/terminal authorization is owner-side against trusted local state; coordination-plane mirrors are display-only.</li>
+      <li><strong>Wire protocol</strong> — every change additive: new kinds appended (never renumbered), new fields optional + <code>decodeIfPresent</code>, no receiver-local revision bumps.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What's left — all human-gated</h2>
+    <p class="lead">Nothing remains that a machine can do unattended. Every Tier-2 row is PENDING in
+    <code>TESTING.md</code> with its exact expected outcome; the full ledger with time estimates lives in
+    <code>docs/COSCREEN_PARITY_PLAN.md</code> under "Human TODO". Recommended order:</p>
+    <ol>
+      <li><strong>TCC grants</strong> (Screen Recording, camera/mic, <code>kTCCServicePostEvent</code>) on the dev Mac — unblocks the most rows.</li>
+      <li><strong>Single-Mac spikes</strong> (no pairing): capture→encode→decode→render; R4 prompt-cadence; Phase-0(c) injection; the PTY host. Each becomes a config flip, not a rewrite.</li>
+      <li><strong>Two-Mac Tier-2 sweep</strong> on different iCloud accounts (a 5K display + a macOS-14 Mac where available).</li>
+      <li><strong>Deploy <code>joescreen-rooms</code></strong> (KV namespace + LiveKit secrets + <code>bun run deploy</code>) to light up rooms/invite links/presence/browser watch.</li>
+      <li><strong>F12 terminal</strong> — uncomment SwiftTerm, build the pump on <code>WriterArbiter</code>, run the PTY host.</li>
+    </ol>
+    <div class="callout">
+      No Tier-2 row was marked hardware-verified. Anything not run on real hardware in this session is
+      written as PENDING with its exact expected outcome.
+    </div>
+  </section>
+
+  <section>
+    <h2>Commit trail (checkpoint history)</h2>
+    <p class="lead">34 commits, one per ordered step, gate green throughout — the durable checkpoint trail.</p>
+    <details>
+      <summary>Show all 34 commits (73fcf67 → 6f2667e)</summary>
+      <div class="body commit-list">
+        <span class="sha">6f2667e</span> docs: final Status section + Human TODO ledger + run order<br>
+        <span class="sha">fd49d91</span> Backlog #11 + #12: Slack deep-link (covered) + terminal WriterArbiter<br>
+        <span class="sha">427fbf2</span> Backlog #10: hover "Share" tab (spike-gated)<br>
+        <span class="sha">0718fc5</span> Backlog #9: draw / annotation (F9)<br>
+        <span class="sha">2128ad9</span> Backlog #8: browser view-only join<br>
+        <span class="sha">0a7b915</span> Backlog #7: rooms + HTTPS invite links + presence-lite<br>
+        <span class="sha">fa079a9</span> Backlog #6: multi-user control display mirror (F5/F10)<br>
+        <span class="sha">55231cd</span> Backlog #5: menu-bar residency (MenuBarExtra + RecentsStore)<br>
+        <span class="sha">515717f</span> Backlog #4: window isolation blocklist (SensitiveAppPolicy)<br>
+        <span class="sha">e9d6bd2</span> Backlog #3: cross-user clipboard (F6)<br>
+        <span class="sha">3538e8f</span> Backlog #2: audio niceties — join-muted preference<br>
+        <span class="sha">c766642</span> Backlog #1 (F4): docs — TESTING row + ledger<br>
+        <span class="sha">ee2cf9d</span> Backlog #1.2-1.5 (F4): planner + secure-input + injector + pump + owner UI<br>
+        <span class="sha">be3cbf0</span> Backlog #1.1 (F4): remote-control wire additions with tolerant decoding<br>
+        <span class="sha">a24aa88</span> M11.6: adversarial review fixes (4) + TESTING/DECISIONS + ledger<br>
+        <span class="sha">0b68b25</span> M11.5: display:&lt;uuid&gt; naming + renegotiation + overlay + one-display<br>
+        <span class="sha">40d51ab</span> M11.4: DisplayCaptureService + ShareCaptureService + DisplayResolutionPolicy<br>
+        <span class="sha">6214796</span> M11.3: display picker + DisplayPickResolver + macOS-14 floor<br>
+        <span class="sha">a959795</span> M11.2: ShareBitratePolicy + admission overload (revive dead code #4)<br>
+        <span class="sha">a057107</span> M11.1: ShareContext reducer + codec-context ordering fix<br>
+        <span class="sha">67bc69b</span> M10: add M10 Tier-2 rows to the ledger<br>
+        <span class="sha">ec92e67</span> M10.5: adversarial review fixes (R24/R32) + TESTING/DECISIONS<br>
+        <span class="sha">c4bda1f</span> M10.4: ParticipantTileStrip + TileSubscriptionPlanner + thumbnails<br>
+        <span class="sha">85ed6a8</span> M10.3: ParticipantMediaState + reactive transport hook<br>
+        <span class="sha">5147960</span> M10.2: display names via the participant.name JWT claim<br>
+        <span class="sha">5ea9624</span> M10.1: TrackClassifier + camera-track routing<br>
+        <span class="sha">c4e86ba</span> M9.8: adversarial review fixes + TESTING/DECISIONS + ledger<br>
+        <span class="sha">969608d</span> M9.7: app/UI lifecycle wiring<br>
+        <span class="sha">71bc71a</span> M9.6: WindowResizeWatcher + ShareInfo population<br>
+        <span class="sha">5b11aed</span> M9.5: transport RemoteTrackDescriptor + SID re-key + trackGone hook<br>
+        <span class="sha">3abae6d</span> M9.4: RoomModel shareInfo + pruneParticipant + ShareEvent.info<br>
+        <span class="sha">bdb6340</span> M9.3: RemoteWindowLifecycle reducer<br>
+        <span class="sha">b9962c8</span> M9.2: VideoFitMath + WindowCascade + ResizeStabilizer<br>
+        <span class="sha">53f1c3d</span> M9.1: ShareTrackName + ShareKind + ShareInfo pure seams<br>
+      </div>
+    </details>
+  </section>
+
+  <footer>
+    Generated for the JoeScreen CoScreen-parity session · commit <span class="num">6f2667e</span> ·
+    2026-07-10. Sources of truth in the repo: <code>docs/COSCREEN_PARITY_PLAN.md</code> (plan + Human
+    TODO ledger + Status), <code>TESTING.md</code> (machine gate + PENDING Tier-2 rows),
+    <code>DECISIONS.md</code> (D15–D18). Self-contained HTML — no external assets, no viewer required.
+  </footer>
+
+</div>
+</body>
+</html>

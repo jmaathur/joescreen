@@ -228,14 +228,22 @@ public final class AppModel {
         let identity = params.identity
         // Display name (M10) → JWT `name` claim → participant.name for everyone incl. late joiners.
         let displayName = params.displayName
-        // Dev path: mint a local HS256 token (#if DEBUG). Production uses TokenClient (M7).
-        #if DEBUG
-        let token = DevTokenMinter.mint(identity: identity, room: params.room, name: displayName)
-        #else
+        // Resolve (token, SFU URL). DEBUG mints a local dev-key token and dials the URL as-is (dev
+        // SFU). RELEASE fetches from the token server, which returns the AUTHORITATIVE SFU URL to dial
+        // (token server + SFU may be different hosts). `serverURL` here is the token-server base in
+        // Release, the SFU URL in DEBUG — see DirectJoinParameters.
         let token: String
-        do { token = try await TokenClient.fetch(server: params.serverURL, room: params.room,
-                                                 identity: identity, name: displayName) }
-        catch { fail("token: \(error)"); return }
+        let sfuURL: URL
+        #if DEBUG
+        token = DevTokenMinter.mint(identity: identity, room: params.room, name: displayName)
+        sfuURL = params.serverURL
+        #else
+        do {
+            let creds = try await TokenClient.fetch(server: params.serverURL, room: params.room,
+                                                    identity: identity, name: displayName)
+            token = creds.token
+            sfuURL = creds.sfuURL
+        } catch { fail("token: \(error)"); return }
         #endif
 
         // Install the unified remote-track hook BEFORE connecting so we don't miss early
@@ -295,7 +303,7 @@ public final class AppModel {
 
         do {
             AppLog.info("connecting to \(params.serverURL.absoluteString) room=\(params.room) identity=\(identity)")
-            try await transport.connect(.init(serverURL: params.serverURL, authToken: token))
+            try await transport.connect(.init(serverURL: sfuURL, authToken: token))
             AppLog.info("connected; opening channels")
             try await transport.openAllDataChannels()
             let state = try await transport.openDataChannel(.state)

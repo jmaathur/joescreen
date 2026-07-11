@@ -43,13 +43,20 @@ public final class ViewerModel {
     public func leave() { Task { await teardown() } }
 
     private func connect(_ params: DirectJoinParameters) async {
-        #if DEBUG
-        let token = DevTokenMinter.mint(identity: params.identity, room: params.room, name: params.displayName)
-        #else
+        // Resolve (token, SFU URL): DEBUG mints locally + dials the URL as-is; RELEASE fetches from the
+        // token server, which returns the authoritative SFU URL to dial.
         let token: String
-        do { token = try await TokenClient.fetch(server: params.serverURL, room: params.room,
-                                                 identity: params.identity, name: params.displayName) }
-        catch { phase = .failed("token: \(error)"); return }
+        let sfuURL: URL
+        #if DEBUG
+        token = DevTokenMinter.mint(identity: params.identity, room: params.room, name: params.displayName)
+        sfuURL = params.serverURL
+        #else
+        do {
+            let creds = try await TokenClient.fetch(server: params.serverURL, room: params.room,
+                                                    identity: params.identity, name: params.displayName)
+            token = creds.token
+            sfuURL = creds.sfuURL
+        } catch { phase = .failed("token: \(error)"); return }
         #endif
 
         await transport.setOnRemoteTrack { [weak self] descriptor, track in
@@ -61,7 +68,7 @@ public final class ViewerModel {
         startConnectionPump()
 
         do {
-            try await transport.connect(.init(serverURL: params.serverURL, authToken: token))
+            try await transport.connect(.init(serverURL: sfuURL, authToken: token))
             try await transport.openAllDataChannels()
             let state = try await transport.openDataChannel(.state)
             stateChannel = state

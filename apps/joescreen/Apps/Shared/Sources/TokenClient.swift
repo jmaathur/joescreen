@@ -18,10 +18,23 @@ enum TokenClient {
         case emptyToken
     }
 
+    /// The resolved credentials for a join: the JWT plus the AUTHORITATIVE SFU URL the token server
+    /// says to dial. The caller MUST dial `sfuURL` (not the token-server base) — in production the
+    /// token server and SFU are generally different hosts, and the token server is the source of
+    /// truth for where the SFU is.
+    struct Credentials: Equatable {
+        let token: String
+        let sfuURL: URL
+    }
+
     /// Fetch a token for `identity` in `room`. `server` is the token-server base (e.g.
-    /// https://token.example.com); the returned SFU URL comes from the server response. `name` (M10)
-    /// is the optional display name → the server's JWT `name` claim → LiveKit `participant.name`.
-    static func fetch(server: URL, room: String, identity: String, name: String? = nil) async throws -> String {
+    /// https://token.example.com — or the co-hosted https://sfu.example.com which serves /token too);
+    /// the returned SFU URL comes from the server response. `name` (M10) is the optional display name
+    /// → the server's JWT `name` claim → LiveKit `participant.name`.
+    ///
+    /// Returns BOTH the token and the SFU URL so the caller dials the right place (fixes the bug where
+    /// the SFU URL the server returned was discarded and the token-server base was dialed instead).
+    static func fetch(server: URL, room: String, identity: String, name: String? = nil) async throws -> Credentials {
         var comps = URLComponents(url: server, resolvingAgainstBaseURL: false)
         comps?.path = "/token"
         var items = [
@@ -38,6 +51,8 @@ enum TokenClient {
         }
         let decoded = try JSONDecoder().decode(Response.self, from: data)
         guard !decoded.token.isEmpty else { throw TokenError.emptyToken }
-        return decoded.token
+        // The server tells us where the SFU is; fall back to the request host only if it omits it.
+        let sfuURL = URL(string: decoded.url) ?? server
+        return Credentials(token: decoded.token, sfuURL: sfuURL)
     }
 }

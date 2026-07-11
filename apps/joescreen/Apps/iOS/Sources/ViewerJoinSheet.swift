@@ -6,7 +6,8 @@ struct ViewerJoinSheet: View {
     @Environment(ViewerModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
-    @State private var serverURL = "ws://localhost:7880"
+    // Defaults to the production endpoint in Release, the local dev SFU in DEBUG (ServerConfig).
+    @State private var serverURL = ServerConfig.defaultServerString
     @State private var room = "demo"
     @State private var identity = UUID().uuidString
     // Display name (M10): defaults to the device name; peers see it on tiles + roster.

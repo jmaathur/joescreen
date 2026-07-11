@@ -7,7 +7,8 @@ struct JoinSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
-    @State private var serverURL: String = "ws://localhost:7880"
+    // Defaults to the production endpoint in Release, the local dev SFU in DEBUG (ServerConfig).
+    @State private var serverURL: String = ServerConfig.defaultServerString
     @State private var room: String = "demo"
     // Fresh identity per sheet presentation — never a shared default.
     @State private var identity: String = UUID().uuidString
@@ -32,7 +33,7 @@ struct JoinSheet: View {
 
             Form {
                 TextField("Your name", text: $displayName, prompt: Text(NSFullUserName()))
-                TextField("Server URL", text: $serverURL, prompt: Text("ws://localhost:7880"))
+                TextField("Server URL", text: $serverURL, prompt: Text(ServerConfig.defaultServerString))
                     .textContentType(.URL)
                 TextField("Room", text: $room, prompt: Text("demo"))
                 HStack {

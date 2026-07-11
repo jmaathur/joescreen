@@ -155,6 +155,49 @@ final class LiveKitIntegrationTests: XCTestCase {
         XCTAssertNil(none)
     }
 
+    // MARK: - Production connectivity (real token server → real SFU)
+
+    /// End-to-end against the DEPLOYED production stack, exactly like a Release app build:
+    /// fetch a token from the token server (`<base>/token`), then dial the SFU URL the server returns.
+    /// Gated on `JOESCREEN_PROD_TOKEN_SERVER` (e.g. https://sfu.cheffing.dev) so the offline gate and
+    /// the local-dev integration run both skip it. Proves a real build can actually join the live SFU.
+    func testProductionTokenServerAndSFUConnect() async throws {
+        guard let raw = ProcessInfo.processInfo.environment["JOESCREEN_PROD_TOKEN_SERVER"],
+              let base = URL(string: raw) else {
+            throw XCTSkip("JOESCREEN_PROD_TOKEN_SERVER not set — skipping production connectivity test.")
+        }
+        let room = "prodtest-\(UUID().uuidString.prefix(8))"
+        let identity = UUID().uuidString
+
+        // 1. Fetch a token from the deployed token server (the app's exact Release request).
+        var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)!
+        comps.path = "/token"
+        comps.queryItems = [.init(name: "room", value: room), .init(name: "identity", value: identity),
+                            .init(name: "name", value: "prod-connect-test")]
+        let (data, resp) = try await URLSession.shared.data(from: comps.url!)
+        XCTAssertEqual((resp as? HTTPURLResponse)?.statusCode, 200, "token server did not return 200")
+        struct TokenResp: Decodable { let token: String; let url: String }
+        let creds = try JSONDecoder().decode(TokenResp.self, from: data)
+        XCTAssertFalse(creds.token.isEmpty, "token server returned an empty token")
+        let sfuURL = try XCTUnwrap(URL(string: creds.url), "token server returned no SFU url")
+
+        // 2. Connect the REAL transport to the SFU URL the server returned, with that token.
+        let transport = LiveKitTransport()
+        defer { Task { await transport.disconnect() } }
+        var states: [MediaConnectionState] = []
+        let box = StateBox()
+        let stateTask = Task { for await s in transport.connectionStates() { box.append(s) } }
+        defer { stateTask.cancel() }
+
+        try await transport.connect(.init(serverURL: sfuURL, authToken: creds.token))
+        // Reaching here (connect didn't throw) means the SFU accepted the production token and the
+        // WebSocket handshake succeeded — the full app-connectivity chain works against production.
+        try await transport.openAllDataChannels()
+        _ = states
+        let connected = box.contains(.connected)
+        XCTAssertTrue(connected, "transport never reached .connected against the production SFU")
+    }
+
     // MARK: - Helpers
 
     /// A synthetic 420v (kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) pixel buffer boxed as an
@@ -213,6 +256,14 @@ final class LiveKitIntegrationTests: XCTestCase {
             return try WireCodec.pack(RoomSnapshot(model: model), sender: sender)
         }
     }
+}
+
+/// Thread-safe collector for connection states in the production connectivity test.
+final class StateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen: [MediaConnectionState] = []
+    func append(_ s: MediaConnectionState) { lock.lock(); seen.append(s); lock.unlock() }
+    func contains(_ s: MediaConnectionState) -> Bool { lock.lock(); defer { lock.unlock() }; return seen.contains(s) }
 }
 
 // MARK: - Test renderer + frame counter
