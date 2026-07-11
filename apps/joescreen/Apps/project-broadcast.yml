@@ -61,7 +61,7 @@ targets:
         CFBundleShortVersionString: "0.1.0"
         # Keep in lockstep with the app's CURRENT_PROJECT_VERSION in project.yml (bumped by the ship
         # pipeline) — an embedded extension's build must match the host app's for App Store validation.
-        CFBundleVersion: "15"
+        CFBundleVersion: "16"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.broadcast-services-upload
           # Module-qualified principal class: <product-module>.<class>. PRODUCT_NAME sets the module.
