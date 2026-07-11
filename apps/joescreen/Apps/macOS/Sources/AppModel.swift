@@ -86,6 +86,11 @@ public final class AppModel {
 
     /// Windows this instance is locally sharing (capture services), keyed by windowID.
     private var localCaptures: [WindowID: WindowCaptureService] = [:]
+    /// The kind (window/display) of each local share, so unshare updates the context correctly.
+    private var localShareKinds: [WindowID: ShareKind] = [:]
+    /// The structural share context this host publishes (D5). Updated to include a PENDING share
+    /// BEFORE publishing it, so the new track gets the right codec (the ordering fix, latent #3).
+    private var shareContext = ShareContext()
 
     // MARK: - Collaborators
 
@@ -246,6 +251,8 @@ public final class AppModel {
             await transport.unpublishVideoTrack(for: id)
         }
         localCaptures.removeAll()
+        localShareKinds.removeAll()
+        shareContext = ShareContext()
         await transport.disconnect()
         windowManager.closeAll()
         remoteWindows.removeAll()
@@ -799,6 +806,13 @@ public final class AppModel {
         let windowID = WindowID()
         let capture = WindowCaptureService(windowID: windowID)
         localCaptures[windowID] = capture
+        localShareKinds[windowID] = .window
+
+        // Codec-ordering fix (latent #3): update the share context to INCLUDE this pending window
+        // BEFORE publishing, so the transport (which now builds publish options at completePublish,
+        // after the first frame) selects the right structural codec for the new track (D5).
+        let pending = shareContext.adding(.window)
+        await pushShareContext(pending)
 
         do {
             let sink = try await transport.publishVideoTrack(for: windowID)
@@ -819,19 +833,30 @@ public final class AppModel {
             })
             try await capture.start(cgWindowID: cgWindowID, sink: sink)
             AppLog.info("capture started for cgWindowID=\(cgWindowID); broadcasting share")
+            // Commit the context (the share is now live).
+            shareContext = pending
             // Update authoritative room + broadcast.
             room.addShare(windowID, owner: me)
             // Populate the advisory ShareInfo (title/app/source pixels) captured at start so receivers
             // can title + aspect-size their viewer window before the first frame (M9).
             if let info = await capture.shareInfo { room.setShareInfo(info, window: windowID) }
-            await transport.updateShareContext(windowCount: localCaptures.count, wholeDisplay: false)
             broadcastState()
             broadcastShareEvent(.shared, windowID: windowID, owner: me, info: room.info(of: windowID))
         } catch {
             AppLog.error("startSharing failed: \(String(describing: error))")
             localCaptures[windowID] = nil
+            localShareKinds[windowID] = nil
             await transport.unpublishVideoTrack(for: windowID)
+            // Roll the context back to exclude the failed share.
+            await pushShareContext(shareContext)
         }
+    }
+
+    /// Push a share context to the transport (windowCount + wholeDisplay) — the transport's
+    /// CodecSelector reads it when building publish options at completePublish (D5).
+    private func pushShareContext(_ context: ShareContext) async {
+        await transport.updateShareContext(
+            windowCount: context.totalShareCount, wholeDisplay: context.wholeDisplay)
     }
 
     public func unshare(_ windowID: WindowID) {
@@ -842,8 +867,13 @@ public final class AppModel {
         guard let me = localParticipantID, room.owner(of: windowID) == me else { return }
         if let capture = localCaptures[windowID] { await capture.stop() }
         localCaptures[windowID] = nil
+        let kind = localShareKinds[windowID] ?? .window
+        localShareKinds[windowID] = nil
         await transport.unpublishVideoTrack(for: windowID)
         room.removeShare(windowID)
+        // Update the structural context (removing this share) so any remaining tracks reflect it.
+        shareContext = shareContext.removing(kind)
+        await pushShareContext(shareContext)
         broadcastState()
         broadcastShareEvent(.unshared, windowID: windowID, owner: me)
     }

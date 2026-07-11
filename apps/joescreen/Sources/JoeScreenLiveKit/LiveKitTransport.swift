@@ -36,6 +36,10 @@ public actor LiveKitTransport: MediaTransport {
         let track: LocalVideoTrack
         let sink: LiveKitVideoFrameSink
         var publication: LocalTrackPublication?
+        /// The structural codec this track was actually published with (for M11 renegotiation — a
+        /// context change that flips the structural codec republishes tracks whose codec no longer
+        /// matches). Nil until `completePublish`.
+        var publishedCodec: JoeScreenKit.VideoCodec? = nil
     }
     private var publishedTracks: [WindowID: PublishedTrack] = [:]
 
@@ -326,22 +330,29 @@ public actor LiveKitTransport: MediaTransport {
         // captured or it times out. We return the sink NOW (so the caller — capture engine or test —
         // starts feeding it) and publish in a detached task the instant the first frame lands. This
         // is the real capture-pipeline shape: get the sink, feed it, the track goes live on frame 1.
-        let publishOptions = makeVideoPublishOptions()
+        //
+        // Codec-ordering fix (latent bug #3): the publish OPTIONS are built inside `completePublish`
+        // (AFTER the first frame), NOT snapshotted here — so they reflect the share context as it is
+        // at publish time, including any share the app registered via `updateShareContext` after this
+        // call returned but before the frame landed.
         Task { [weak self] in
             await sink.waitForFirstFrame()
             guard let self else { return }
-            await self.completePublish(windowID: windowID, track: track, options: publishOptions)
+            await self.completePublish(windowID: windowID, track: track)
         }
         return sink
     }
 
-    /// Finish publishing a track once its first frame has been captured (frame-before-publish).
-    private func completePublish(windowID: WindowID, track: LocalVideoTrack, options: VideoPublishOptions) async {
+    /// Finish publishing a track once its first frame has been captured (frame-before-publish). Builds
+    /// the publish options HERE so the codec reflects the current share context (the ordering fix).
+    private func completePublish(windowID: WindowID, track: LocalVideoTrack) async {
         // The share may have been unpublished during the wait; bail if so.
         guard publishedTracks[windowID]?.track === track else { return }
+        let options = makeVideoPublishOptions()
         do {
             let publication = try await room.localParticipant.publish(videoTrack: track, options: options)
             publishedTracks[windowID]?.publication = publication
+            publishedTracks[windowID]?.publishedCodec = codecSelector.current
         } catch {
             // Publish failed (e.g. disconnected mid-handshake). Surface as a state blip; the caller's
             // higher-level share flow can retry. We don't crash a live session over one track.
