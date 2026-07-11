@@ -53,6 +53,7 @@ export function invitePage(opts: {
   <div class="slug">room · ${esc(slug)}</div>
   <p class="presence">${esc(presenceText)}</p>
   <a class="btn primary" id="join" href="${esc(link)}">Join in JoeScreen</a>
+  <a class="btn secondary" href="${esc(`${origin}/watch/${slug}`)}">Watch in browser</a>
   <a class="btn secondary" href="${esc(downloadURL)}">Get JoeScreen</a>
   <p class="fallback">Don't have the app? <a href="${esc(downloadURL)}">Download it</a>, then reopen this link.</p>
   <script>

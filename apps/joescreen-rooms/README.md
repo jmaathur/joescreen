@@ -13,8 +13,13 @@ following the `joescreen-download` / cheffing.dev pattern.
   RoomService `ListParticipants` (Twirp), authorized with a short-lived admin JWT minted Worker-side.
   Presence degrades to "unknown" (never 500s) when the RoomService isn't configured.
 
-**No app-token minting** — that stays in the Go token server (`apps/livekit/token-server`,
-DECISIONS §5.4). Browser view-only tokens (backlog #8) are the only thing minted Worker-side.
+- **Browser view-only join (backlog #8):** `GET /watch/<slug>` mints a subscribe-only token
+  Worker-side (`canSubscribe:true, canPublish:false, canPublishData:false`) and serves a static
+  `livekit-client` page that renders the room's `window:`/`display:` share tracks. Element-size-driven
+  adaptiveStream holds R24/R32. `GET /api/rooms/<slug>/token` returns the token as JSON for embedders.
+
+**No APP-token minting** — that stays in the Go token server (`apps/livekit/token-server`,
+DECISIONS §5.4). Only browser view-only tokens are minted Worker-side (WebCrypto HS256).
 
 ## Machine-verified (this repo)
 - `bun run test` (vitest) — slug validation/generation/normalization, deep-link shape, HS256 signing,

@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { invitePage } from "./page";
+import { watchPage } from "./watchPage";
 import { roomPresence } from "./presence";
+import { mintViewOnlyToken } from "./browserToken";
 import { isValidSlug, makeSlug, normalizeCustomSlug, deepLink, type RoomRecord } from "./slug";
 
 type Bindings = {
@@ -84,6 +86,47 @@ app.get("/r/:slug", async (c) => {
 	});
 	const origin = new URL(c.req.url).origin;
 	return c.html(invitePage({ slug, record, presenceCount: presence.count, downloadURL: c.env.DOWNLOAD_URL, origin }));
+});
+
+// Browser VIEW-ONLY watch page (backlog #8): mints a subscribe-only token Worker-side (§5.4) and
+// serves a static livekit-client page that renders the room's window:/display: share tracks.
+app.get("/watch/:slug", async (c) => {
+	const slug = c.req.param("slug");
+	if (!isValidSlug(slug)) return c.text("Invalid room link.", 400);
+	const raw = await c.env.ROOMS.get(slug);
+	if (!raw) return c.text("Room not found.", 404);
+	const record = JSON.parse(raw) as RoomRecord;
+	if (!c.env.LIVEKIT_API_KEY || !c.env.LIVEKIT_API_SECRET) {
+		return c.text("View-only watching isn't configured for this deployment.", 503);
+	}
+	const token = await mintViewOnlyToken({
+		apiKey: c.env.LIVEKIT_API_KEY,
+		apiSecret: c.env.LIVEKIT_API_SECRET,
+		room: record.room,
+		identity: `web-${crypto.randomUUID()}`,
+		nowSeconds: Math.floor(Date.now() / 1000),
+	});
+	return c.html(watchPage({ slug, room: record.room, sfu: record.sfu, token }));
+});
+
+// Programmatic view-only token (for an embedder building its own player). JSON: { token, sfu, room }.
+app.get("/api/rooms/:slug/token", async (c) => {
+	const slug = c.req.param("slug");
+	if (!isValidSlug(slug)) return c.json({ error: "invalid slug" }, 400);
+	const raw = await c.env.ROOMS.get(slug);
+	if (!raw) return c.json({ error: "not found" }, 404);
+	const record = JSON.parse(raw) as RoomRecord;
+	if (!c.env.LIVEKIT_API_KEY || !c.env.LIVEKIT_API_SECRET) {
+		return c.json({ error: "token minting not configured" }, 503);
+	}
+	const token = await mintViewOnlyToken({
+		apiKey: c.env.LIVEKIT_API_KEY,
+		apiSecret: c.env.LIVEKIT_API_SECRET,
+		room: record.room,
+		identity: `web-${crypto.randomUUID()}`,
+		nowSeconds: Math.floor(Date.now() / 1000),
+	});
+	return c.json({ token, sfu: record.sfu, room: record.room });
 });
 
 export default app;
