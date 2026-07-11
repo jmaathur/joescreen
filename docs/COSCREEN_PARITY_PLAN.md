@@ -507,3 +507,64 @@ exact expected outcomes.
   `writerID` on the wire). iOS is a first-class terminal client (text, not injection).
 - Everything above the PTY host is machine-buildable once the spike + dep land; the `WriterArbiter`
   arbitration seam is already done.
+
+---
+
+## Status (autonomous session complete)
+
+**Authored:** 2026-07-10 · by the Opus 4.8 (ultracode) implementation session per §5 (no human in the
+loop). Every milestone + backlog item's machine-verifiable scope landed; every human-gated slice is
+deferred to the ledger above, never faked. Commit trail: `git log --oneline` from `73fcf67`.
+
+### What landed (machine-verified)
+- **Core milestones M9 → M10 → M11**, each as its ordered steps, per-step commits, gate green
+  throughout, adversarially reviewed before each milestone commit:
+  - **M9** — receive-side lifecycle correctness + share metadata: the pure `RemoteWindowLifecycle`
+    reducer (no more frozen ghosts / duplicate windows / SFU-blip flap), SID-keyed transport registry
+    (latent bug #1), `trackGone` dual hook incl. unpublish-is-authoritative, owner repair (latent #5),
+    aspect-true windows + cursor letterbox mapping (`VideoFitMath`), `WindowResizeWatcher`, `ShareInfo`.
+  - **M10** — participant tile strip: `TrackClassifier`, display names via the JWT `name` claim,
+    `ParticipantMediaReducer` (mute reads `isMuted`, never subscription), the tile strip + live share
+    thumbnails, decode budget. Review caught + fixed 2 R24/R32 bandwidth bugs.
+  - **M11** — whole-screen share: codec-ordering fix (latent #3, D5 structural via `ShareContext`),
+    `ShareBitratePolicy` + admission revival (dead code #4), display picker + macOS-14-floor
+    `DisplayPickResolver`, `DisplayCaptureService` (hall-of-mirrors filter, screen-lock pause, unplug),
+    `display:` naming, structural VP9↔H.264 renegotiation, one-display-per-sharer, `ShareBorderOverlay`.
+    Review caught + fixed 4 concurrency/correctness bugs (2 high-sev actor-reentrancy).
+- **Backlog #1–#12** machine-verifiable scope (ranked order): remote-control runtime (planner/injector/
+  pump/secure-input, safe-default off), join-muted pref, cross-user clipboard (session-scoped off),
+  `SensitiveAppPolicy` blocklist, menu-bar residency + `RecentsStore`, multi-user control display
+  mirror (D12-safe), the `joescreen-rooms` Cloudflare Worker (slugs + invite page + presence +
+  browser view-only tokens), draw/annotation (F9), hover-share hit-tester (spike-gated), Slack unfurl
+  (covered by #5+#7), and the terminal `WriterArbiter`.
+
+### Final machine gate (all green)
+- `swift build && swift test` (from `apps/joescreen/`): **330 tests, 7 skipped, 0 failures** (120 at
+  session start + 210 new Tier-1 across M9–M11 + backlog).
+- `xcodegen` + `xcodebuild` **JoeScreen-macOS AND JoeScreen-iOS**: BUILD SUCCEEDED; macOS app launches.
+- **LiveKit integration suite** vs a live SFU (`bun run livekit`, `LIVEKIT_URL=ws://localhost:7880`):
+  **12 tests, 0 failures** (real VP9 A→B, six channels, identity, media metadata).
+- **`apps/joescreen-rooms`** Worker: 15 vitest tests + tsc clean + local `wrangler dev` smoke.
+- **Go token server**: `go build ./...` clean.
+
+### Everything remaining is human-gated (see the full Human TODO ledger above)
+Nothing is left that a machine can do unattended. The remaining work is: TCC grants (Screen Recording,
+camera/mic, `kTCCServicePostEvent`), the Phase-0(c) injection spike + R4 prompt-cadence spike + the
+PTY spike, the Cloudflare deploy of `joescreen-rooms`, the SwiftTerm dep decision, and every Tier-2
+row (needs 2–3 Macs on different iCloud accounts, a 5K display, a macOS-14 Mac). All are listed in the
+`## Human TODO` ledger with time + what each unblocks, and every Tier-2 row is PENDING in TESTING.md
+with its exact expected outcome. **Nothing here was marked hardware-verified.**
+
+### Recommended order to run the human work
+1. **Grant Screen Recording + camera/mic to `JoeScreen.app`** on the dev Mac (~2 min) — unblocks the
+   most rows (M9/M10/M11 + F1–F8).
+2. **Single-Mac spikes** (no pairing): Phase-0(b) capture→encode→decode→render, the R4 prompt-cadence
+   spike (flip hover-share to `.direct`), the Phase-0(c) injection spike (flip `CGEventInjector`), the
+   PTY spike for F12. Each is a config flip afterward, not a rewrite.
+3. **Two-Mac Tier-2 sweep** (M9-1…8, M10-1…6, M11-1…9, F1–F8) on different iCloud accounts; a 5K
+   display for M11-1 and a macOS-14 Mac for M11-8 if available.
+4. **Deploy `joescreen-rooms`** (KV namespace + LIVEKIT secrets + `bun run deploy`) to light up rooms,
+   invite links, presence, and the browser view-only watch page (#7/#8/#11), then run the Safari-VP9
+   Tier-2 row.
+5. **F12 terminal**: uncomment SwiftTerm, build the terminal pump on the `WriterArbiter`, run the PTY
+   host end-to-end — the last, most novel, least-parity-critical item.
