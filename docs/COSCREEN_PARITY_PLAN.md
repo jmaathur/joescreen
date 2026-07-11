@@ -265,7 +265,7 @@ hall-of-mirrors fix. Resolution: pure `DisplayResolutionPolicy` — source pixel
 `SCDisplay.width/height` (points) × `pointPixelScale`; cap at a 4.096 Mpx budget
 (≈2560×1600; a 5K display captures at ≈2389×1344), snap even, never upscale. 420v, 30fps,
 queueDepth 5. `showsCursor = true` for displays (deviation from the window path — the overlay
-plane never carries the sharer's own pointer; open question below). Lifecycle: display
+plane never carries the sharer's own pointer; decided in §5). Lifecycle: display
 removal (1 Hz `CGGetActiveDisplayList` poll) = terminal unshare; screen lock
 (`DistributedNotificationCenter` screenIsLocked/Unlocked) = pause (SCK keeps delivering
 lock-screen frames, so `PauseDetector` alone would never fire); display-resolution change →
@@ -331,7 +331,7 @@ From the roadmap architect; each lands with the same seam+tests+PENDING-rows dis
 
 | # | Item | Verdict / effort | Sketch |
 |---|---|---|---|
-| 1 | **Remote control MVP (F4)** | spike-gated · L | `InputAuthorizer`/`CoordinateMapper`/`ControlCapability` are built+tested; missing runtime: `InputEventPlanner` (pure: click→down+up, drags, text chunking), `CGEventInjector` (JoeScreenInputMac; `InjectionStrategy` hidTap/postToPid/hybrid chosen by the **Phase-0(c) spike** — R26: postToPid unreliable to unfocused windows; HID-tap moves the owner's physical cursor, CoScreen-equivalent), `SecureInputDetector` (R8 banner, named in RISKS but nonexistent), `InputPump` on the already-open `.input` channel (CursorPump template), owner consent UI + "X is driving" badge. Wire: append `mouseMove`/`mouseDrag` kinds + optional `text:` payload **with tolerant decoding** (`.unsupported` case — the plain String enum throws on unknown raw values today; without the shim old peers break), optional kind 13 `controlRequest`. |
+| 1 | **Remote control MVP (F4)** | spike-gated · L | `InputAuthorizer`/`CoordinateMapper`/`ControlCapability` are built+tested; missing runtime: `InputEventPlanner` (pure: click→down+up, drags, text chunking), `CGEventInjector` (JoeScreenInputMac; `InjectionStrategy` hidTap/postToPid/hybrid — default **hidTap**, runtime-switchable; the **Phase-0(c) spike** goes on the Human TODO ledger and later just flips the config — R26: postToPid unreliable to unfocused windows; HID-tap moves the owner's physical cursor, CoScreen-equivalent), `SecureInputDetector` (R8 banner, named in RISKS but nonexistent), `InputPump` on the already-open `.input` channel (CursorPump template), owner consent UI + "X is driving" badge. Wire: append `mouseMove`/`mouseDrag` kinds + optional `text:` payload **with tolerant decoding** (`.unsupported` case — the plain String enum throws on unknown raw values today; without the shim old peers break), optional kind 13 `controlRequest`. Autonomous scope: everything is buildable and Tier-1-testable without the spike; only strategy selection + live injection rows are human-gated. |
 | 2 | Audio niceties | now · S | Join-muted default (flip the `setMicrophone(true)` on connect behind a pref), speaking rings ride M10's state hook. |
 | 3 | **Cross-user clipboard (F6)** | now · M | `ClipboardSyncEngine` tested; add MainActor `changeCount` poller + pump on `.clipboard` channel + session-scoped default-OFF toggle. Exfiltration posture: never persisted-on; size limits + echo suppression already tested. |
 | 4 | Window isolation blocklist | now · S | Pure `SensitiveAppPolicy` (1Password/Bitwarden/Keychain/…, exact+prefix); enforce at picker `excludedBundleIDs`, `shareWindow(cgWindowID:)` resolution, and capture start. |
@@ -347,18 +347,40 @@ From the roadmap architect; each lands with the same seam+tests+PENDING-rows dis
 
 ---
 
-## 5. Human/hardware gates (the agent must stop and ask, never fake)
+## 5. Autonomous operation policy (no human in the loop)
 
-- **TCC grants** (one-time, per machine): Screen Recording (M4 two-instance demo still pending
-  it), camera/mic, and for backlog #1 `kTCCServicePostEvent`(+ possibly Accessibility).
-- **Phase-0(c) injection spike** (backlog #1) and the **R4 prompt-cadence spike** (backlog #10)
-  need a human at the keyboard; record results in DECISIONS.md before building on them.
-- **Multi-device Tier-2 rows:** 2 Macs minimum (one base Apple Silicon), different iCloud
-  accounts for anything SharePlay. All F/H/P rows stay PENDING until a human runs them.
-- **Open product questions** (ask the user, don't decide silently): display-share
-  `showsCursor` (baked-in cursor vs extending CursorPump to broadcast the sharer's own
-  pointer); renegotiation freeze acceptable vs grandfathering VP9 tracks; one-display-per-
-  sharer cap; token-minting residency (Worker vs Go server); clipboard toggle persistence.
+The implementation session runs unattended. Nothing in this plan may block on a human;
+work that genuinely needs one is **deferred, never faked and never waited on**.
+
+**The Human TODO ledger.** Maintain a `## Human TODO` section at the bottom of this file.
+Every time work hits something only a human can do — a TCC grant (Screen Recording,
+camera/mic, `kTCCServicePostEvent`/Accessibility), the Phase-0(c) injection spike, the R4
+prompt-cadence spike, any Tier-2 row needing a second Mac or different iCloud accounts —
+implement everything up to that boundary, write the corresponding TESTING.md row as
+PENDING with the exact expected outcome, add a ledger entry (what to do, how long it
+takes, what it unblocks), and **continue with the next item**. Never simulate a grant,
+never mark a Tier-2 row passed, never sit idle waiting.
+
+**Spike-gated code paths** are built behind runtime switches so the human result slots in
+later without rework: e.g. `CGEventInjector` ships with the `InjectionStrategy` enum and a
+default (hidTap) plus a config override, so the Phase-0(c) spike later picks the strategy
+by flipping a value, not by restructuring code.
+
+**Product decisions — decided now for autonomous execution** (each is deliberately the
+reversible option; record any further decisions the run must make in DECISIONS.md with a
+one-paragraph rationale, choosing the reversible option when uncertain):
+1. **Display-share `showsCursor` = true** (sharer's pointer baked into display shares).
+   Window shares keep `false` + overlay cursors. Revisit if overlay-everywhere is wanted.
+2. **Renegotiation: strict D5** — live VP9 window tracks republish as H.264 when a display
+   share joins; the ~1s freeze is accepted. A single flag can soften this later.
+3. **One display share per sharer** in v1 (window+display mix allowed; display+display
+   refused with a visible reason). Simplifies admission; lift later if wanted.
+4. **Token residency:** the Go token server (`apps/livekit/token-server`) stays the minter
+   for app tokens; browser view-only tokens (backlog #8) are minted Worker-side via
+   WebCrypto HS256 with the LiveKit secret stored as a Worker secret. Consolidate later
+   only if operating two minters proves annoying.
+5. **Clipboard toggle: session-scoped, default OFF, never persisted.** Security posture
+   wins; persistence can be added behind a preference later.
 
 ## 6. Definition of done, per milestone
 

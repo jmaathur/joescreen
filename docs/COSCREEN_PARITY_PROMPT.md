@@ -13,8 +13,10 @@ claude --model claude-opus-4-8
 Notes:
 - The prompt contains the keyword **ultracode**, which turns on multi-agent workflow
   orchestration for the session. Opus 4.8 is set via `--model claude-opus-4-8`.
-- Expect a long session (hours). It will pause and ask you at the human gates
-  (TCC grants, spikes, product decisions) — check on it periodically.
+- The session is designed to run **unattended, start to finish** — product decisions are
+  pre-made in the plan (§5), and anything only a human can do (TCC grants, spikes,
+  two-Mac test rows) is deferred into a `Human TODO` ledger at the bottom of the plan
+  instead of blocking. When it ends, run the ledger at your leisure.
 - Useful while it runs: `/workflows` shows live agent progress; `git log --oneline`
   shows the per-step commits landing.
 
@@ -30,9 +32,11 @@ mapping + design + verification process against this exact repo, so trust its fi
 claims but re-verify any line numbers before editing.
 
 MISSION
-Execute milestones M9, M10, M11 from the plan, in order, then stop and summarize before
-touching the post-core backlog. Each milestone lands as its ordered steps, each step
-compiling and keeping the machine gate green.
+You operate fully autonomously — no human is watching and none will answer questions, so
+never stop to ask; the plan's §5 policy tells you how to proceed at every gate. Execute
+milestones M9, M10, M11 from the plan, in order, then continue straight into the
+post-core backlog (section 4) in its ranked order. Each milestone lands as its ordered
+steps, each step compiling and keeping the machine gate green.
 
 OPERATING RULES
 1. Work milestone by milestone; within a milestone follow the plan's ordered steps. Before
@@ -66,16 +70,25 @@ OPERATING RULES
    command + actual result, and Tier-2 hardware rows written as PENDING with expected
    outcomes. NEVER claim anything is hardware-verified; nothing you can observe in this
    session counts as a Tier-2 pass.
-7. Human gates — stop and ask, never fake or skip silently:
-   - Any TCC grant (Screen Recording, camera/mic, PostEvent).
-   - The plan's open product questions when you reach them (display-share showsCursor,
-     renegotiation freeze policy, one-display cap, token residency, clipboard toggle
-     persistence). Present the tradeoff, recommend one option, wait for the answer.
-   - Anything needing a second Mac or different iCloud accounts.
-8. If you finish M9–M11 with green gates and pushed commits, write a status section at
-   the bottom of docs/COSCREEN_PARITY_PLAN.md (what landed, what's PENDING on hardware,
-   recommended next backlog item) and stop. Ask before starting backlog item #1 (remote
-   control) — it is spike-gated on a human.
+7. Human-gated work — defer, never block, never fake (plan §5 is the authority):
+   - Anything only a human can do (TCC grants, the Phase-0(c) injection spike, the R4
+     prompt-cadence spike, rows needing a second Mac or different iCloud accounts):
+     implement everything up to that boundary, write the TESTING.md row as PENDING with
+     the exact expected outcome, add an entry to the `## Human TODO` ledger at the bottom
+     of docs/COSCREEN_PARITY_PLAN.md (what to do, rough time, what it unblocks), and move
+     on to the next item. Build spike-gated paths behind runtime switches (per §5) so the
+     spike result later slots in as a config change, not a rewrite.
+   - Product decisions: the five open questions are already decided in plan §5 — apply
+     them. For any new decision the plan doesn't cover, decide yourself: pick the
+     reversible option, record it in DECISIONS.md with a one-paragraph rationale, and
+     keep going. Never leave a question dangling in chat.
+8. After M9–M11, work the backlog (plan section 4) in its ranked order. For each item,
+   deliver its full machine-verifiable scope (pure seams, pumps, UI, Tier-1 tests, green
+   gates, per-step commits); defer only its human-gated slice via the ledger. Stop only
+   when every remaining unit of work is human-gated or the backlog is exhausted. Then
+   write a status section at the bottom of docs/COSCREEN_PARITY_PLAN.md — what landed,
+   what's PENDING on hardware, the complete Human TODO ledger, and the recommended order
+   for running it — commit, push, and end with a summary.
 
 CONTEXT MANAGEMENT
 The plan document is self-contained — prefer re-reading it (and the code) over relying on
@@ -85,7 +98,7 @@ checkpoint trail.
 
 START
 Begin now: read docs/COSCREEN_PARITY_PLAN.md, run the M9 pre-flight understanding
-workflow, then implement M9 step by step.
+workflow, then implement M9 step by step. Do not wait for confirmation at any point.
 ```
 
 ## What to expect
@@ -97,5 +110,9 @@ workflow, then implement M9 step by step.
   and speaking rings.
 - **M11** (display share) adds whole-screen sharing with the codec/admission plumbing done
   right.
-- The session should end with all machine gates green and a stack of PENDING Tier-2 rows —
-  those need you and a second Mac. Budget an evening for the two-Mac run-book afterwards.
+- After the core it continues into the backlog (remote control seams, clipboard, blocklist,
+  menu-bar, rooms/links, browser viewer, draw, …) until only human-gated work remains.
+- It should end unprompted with all machine gates green, per-step commits pushed, and a
+  `Human TODO` ledger at the bottom of the plan — TCC grants, the injection spike, and the
+  two-Mac Tier-2 run-book. Budget an evening to run the ledger; nothing in it blocks the
+  code that's already landed.
