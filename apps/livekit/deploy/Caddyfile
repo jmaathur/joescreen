@@ -1,0 +1,11 @@
+# Production reverse proxy for the SFU box (sfu.cheffing.dev). Terminates TLS (auto Let's Encrypt),
+# routes /token → the token server (:8080), everything else → LiveKit signaling (:7880).
+sfu.cheffing.dev {
+	@token path /token /token/*
+	handle @token {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		reverse_proxy 127.0.0.1:7880
+	}
+}

@@ -1,0 +1,35 @@
+# Production SFU stack for sfu.cheffing.dev. Deploy on a host with a domain + DNS pointing at it.
+# Secrets come from ./.env (git-ignored): LIVEKIT_API_KEY, LIVEKIT_API_SECRET.
+#   1. Put the generated key/secret in ./.env
+#   2. docker compose up -d --build
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.3
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    network_mode: host
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY in .env}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}"
+  token-server:
+    build: ../token-server
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:?}"
+      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET:?}"
+      LIVEKIT_URL: "wss://sfu.cheffing.dev"
+    depends_on:
+      - livekit
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  caddy_data:
+  caddy_config:

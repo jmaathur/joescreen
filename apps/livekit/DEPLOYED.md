@@ -9,15 +9,20 @@ The production LiveKit SFU is **live** (deployed 2026-07-11).
   proxy would break WebRTC media + TLS).
 
 ## Stack (on the box at `/opt/joescreen-sfu/`)
+Reproducible config committed at `apps/livekit/deploy/` (docker-compose.yml + Caddyfile + livekit.yaml).
 - **livekit** — `livekit/livekit-server:v1.13.3`, `network_mode: host` (needs the raw UDP media
   range). Config `livekit.yaml`: port 7880, RTC UDP 50000–50100, ICE-TCP 7881, `use_external_ip`.
   API key/secret injected via `LIVEKIT_KEYS` env (NOT in the repo — see below).
-- **caddy** — `caddy:2`, host networking, terminates TLS for `wss://sfu.cheffing.dev` and reverse-
-  proxies to `127.0.0.1:7880`. Auto-provisions + renews a Let's Encrypt cert.
+- **token-server** — the Go minter (`apps/livekit/token-server`, multi-stage distroless Docker),
+  host networking on :8080, holds the real key/secret, returns `url: wss://sfu.cheffing.dev`. This is
+  what a **Release app build** fetches a join token from.
+- **caddy** — `caddy:2`, host networking, terminates TLS for `sfu.cheffing.dev` (auto Let's Encrypt).
+  Routes `/token` → the token server (:8080), everything else → LiveKit signaling (:7880).
 - Firewall (ufw): 22, 80, 443/tcp, 7880, 7881/tcp, 50000–50100/udp.
 
 ## URLs
-- App dials: **`wss://sfu.cheffing.dev`**
+- App dials (SFU): **`wss://sfu.cheffing.dev`**
+- App fetches a token (Release): **`https://sfu.cheffing.dev/token?room=&identity=&name=`** → `{token, url}`
 - RoomService (presence, admin): **`https://sfu.cheffing.dev`**
 - TURN-over-TLS on :443 is currently **disabled** (`turn.enabled: false`). Direct UDP + ICE-TCP
   fallback works for most networks; enable TURN later for strict corporate firewalls (needs a cert
@@ -47,3 +52,14 @@ docker compose pull && docker compose up -d   # update (pin the version in docke
 - Let's Encrypt cert obtained for `sfu.cheffing.dev`; HTTPS 200.
 - A token signed with the generated key/secret validates against `https://sfu.cheffing.dev/rtc/validate`
   → HTTP 200 `success` (full media-plane auth path works end to end).
+- `GET /token` returns `{token, url: wss://sfu.cheffing.dev}`; that token validates → 200.
+- The REAL `LiveKitTransport` (the app's transport) reaches `.connected` against `wss://sfu.cheffing.dev`
+  using a token from `/token` — the app's exact Release path. Proven by
+  `testProductionTokenServerAndSFUConnect` (run with `JOESCREEN_PROD_TOKEN_SERVER=https://sfu.cheffing.dev`).
+
+## Rebuild from scratch
+```sh
+scp -r apps/livekit/deploy apps/livekit/token-server root@<host>:/opt/joescreen-sfu/
+ssh root@<host> 'cd /opt/joescreen-sfu/deploy && printf "LIVEKIT_API_KEY=…\nLIVEKIT_API_SECRET=…\n" > .env && docker compose up -d --build'
+# then point sfu.<domain> DNS (A record, DNS-only) at the host + open the firewall ports.
+```
