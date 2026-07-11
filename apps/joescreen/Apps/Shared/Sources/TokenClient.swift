@@ -19,14 +19,17 @@ enum TokenClient {
     }
 
     /// Fetch a token for `identity` in `room`. `server` is the token-server base (e.g.
-    /// https://token.example.com); the returned SFU URL comes from the server response.
-    static func fetch(server: URL, room: String, identity: String) async throws -> String {
+    /// https://token.example.com); the returned SFU URL comes from the server response. `name` (M10)
+    /// is the optional display name → the server's JWT `name` claim → LiveKit `participant.name`.
+    static func fetch(server: URL, room: String, identity: String, name: String? = nil) async throws -> String {
         var comps = URLComponents(url: server, resolvingAgainstBaseURL: false)
         comps?.path = "/token"
-        comps?.queryItems = [
+        var items = [
             URLQueryItem(name: "room", value: room),
             URLQueryItem(name: "identity", value: identity),
         ]
+        if let name, !name.isEmpty { items.append(URLQueryItem(name: "name", value: name)) }
+        comps?.queryItems = items
         guard let url = comps?.url else { throw TokenError.badBaseURL }
 
         let (data, response) = try await URLSession.shared.data(from: url)

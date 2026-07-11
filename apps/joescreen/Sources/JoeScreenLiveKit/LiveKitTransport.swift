@@ -174,6 +174,32 @@ public actor LiveKitTransport: MediaTransport {
     /// The underlying room (for app-layer rendering that needs SwiftUIVideoView(track)).
     public var underlyingRoom: Room { room }
 
+    /// The LiveKit `participant.name` (JWT `name` claim, M10) for a `ParticipantID`, or nil if unknown
+    /// / unset. Scans local + remote participants by their bound identity. The app falls back to the
+    /// 4-char UUID label when nil.
+    public func displayName(for participantID: ParticipantID) -> String? {
+        guard let identity = participantToIdentity[participantID] else {
+            // Not bound yet — try matching by the raw uuid identity (our tokens set sub = uuid).
+            return displayNameByIdentityString(participantID.uuidString)
+        }
+        return displayNameByIdentityString(identity)
+    }
+
+    private func displayNameByIdentityString(_ identity: String) -> String? {
+        if room.localParticipant.identity?.stringValue == identity {
+            return nonEmpty(room.localParticipant.name)
+        }
+        for p in room.remoteParticipants.values where p.identity?.stringValue == identity {
+            return nonEmpty(p.name)
+        }
+        return nil
+    }
+
+    private func nonEmpty(_ s: String?) -> String? {
+        guard let s, !s.isEmpty else { return nil }
+        return s
+    }
+
     // MARK: - MediaTransport
 
     public func connect(_ configuration: MediaTransportConfiguration) async throws {

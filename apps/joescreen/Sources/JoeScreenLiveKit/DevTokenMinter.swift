@@ -28,6 +28,7 @@ public enum DevTokenMinter {
     public static func mint(
         identity: String,
         room: String,
+        name: String? = nil,
         apiKey: String = devAPIKey,
         apiSecret: String = devAPISecret,
         now: Date = Date(),
@@ -44,13 +45,16 @@ public enum DevTokenMinter {
             "canSubscribe": true,
             "canPublishData": true,
         ]
-        let claims: [String: Any] = [
+        var claims: [String: Any] = [
             "iss": apiKey,
             "sub": identity,
             "nbf": nbf,
             "exp": exp,
             "video": videoGrant,
         ]
+        // Top-level `name` claim (M10): LiveKit sets `participant.name` from it and distributes it to
+        // everyone incl. late joiners — no metadata grant, no wire-protocol surface. Omitted when nil.
+        if let name, !name.isEmpty { claims["name"] = name }
 
         let headerSegment = base64URLEncode(jsonData(header))
         let claimsSegment = base64URLEncode(jsonData(claims))

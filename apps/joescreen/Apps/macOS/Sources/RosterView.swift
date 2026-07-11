@@ -50,8 +50,8 @@ struct RosterRow: View {
             Circle()
                 .fill(model.color(for: id))
                 .frame(width: 12, height: 12)
-            Text(model.shortLabel(for: id))
-                .font(.body.monospaced())
+            Text(model.displayLabel(for: id))
+                .font(.body)
             if isLocal {
                 Text("(you)")
                     .font(.caption)

@@ -126,12 +126,15 @@ public final class AppModel {
 
     private func connect(_ params: DirectJoinParameters) async {
         let identity = params.identity
+        // Display name (M10) → JWT `name` claim → participant.name for everyone incl. late joiners.
+        let displayName = params.displayName
         // Dev path: mint a local HS256 token (#if DEBUG). Production uses TokenClient (M7).
         #if DEBUG
-        let token = DevTokenMinter.mint(identity: identity, room: params.room)
+        let token = DevTokenMinter.mint(identity: identity, room: params.room, name: displayName)
         #else
         let token: String
-        do { token = try await TokenClient.fetch(server: params.serverURL, room: params.room, identity: identity) }
+        do { token = try await TokenClient.fetch(server: params.serverURL, room: params.room,
+                                                 identity: identity, name: displayName) }
         catch { fail("token: \(error)"); return }
         #endif
 
@@ -311,6 +314,7 @@ public final class AppModel {
             room.pruneParticipant(owner) // no revision bump
         }
         recomputeRoster()
+        Task { [weak self] in await self?.refreshDisplayNames() }
     }
 
     /// The displayed roster = live transport members ∪ current share owners ∪ me. Share owners are
@@ -816,5 +820,26 @@ public final class AppModel {
 
     public func shortLabel(for id: ParticipantID) -> String {
         String(id.uuidString.prefix(4))
+    }
+
+    // MARK: - Display names (M10)
+
+    /// Cached LiveKit `participant.name` per participant (JWT `name` claim). Populated on participant
+    /// changes; the reactive per-event push arrives with M10.3's ParticipantMediaState hook.
+    public private(set) var displayNames: [ParticipantID: String] = [:]
+
+    /// The best label for a participant: their display name if set, else the 4-char UUID fallback.
+    public func displayLabel(for id: ParticipantID) -> String {
+        if let name = displayNames[id], !name.isEmpty { return name }
+        return shortLabel(for: id)
+    }
+
+    /// Refresh the display-name cache for the current participant set from the transport.
+    private func refreshDisplayNames() async {
+        var names: [ParticipantID: String] = [:]
+        for id in transportParticipants {
+            if let name = await transport.displayName(for: id) { names[id] = name }
+        }
+        displayNames = names
     }
 }

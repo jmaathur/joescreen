@@ -11,6 +11,8 @@ struct JoinSheet: View {
     @State private var room: String = "demo"
     // Fresh identity per sheet presentation — never a shared default.
     @State private var identity: String = UUID().uuidString
+    // Display name (M10): defaults to the macOS full user name; peers see it on tiles + roster.
+    @State private var displayName: String = NSFullUserName()
 
     private var parsedURL: URL? { URL(string: serverURL.trimmingCharacters(in: .whitespaces)) }
     private var canJoin: Bool {
@@ -27,6 +29,7 @@ struct JoinSheet: View {
                 .foregroundStyle(.secondary)
 
             Form {
+                TextField("Your name", text: $displayName, prompt: Text(NSFullUserName()))
                 TextField("Server URL", text: $serverURL, prompt: Text("ws://localhost:7880"))
                     .textContentType(.URL)
                 TextField("Room", text: $room, prompt: Text("demo"))
@@ -55,10 +58,12 @@ struct JoinSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Join") {
                     guard let url = parsedURL else { return }
+                    let name = displayName.trimmingCharacters(in: .whitespaces)
                     model.requestJoin(DirectJoinParameters(
                         serverURL: url,
                         room: room.trimmingCharacters(in: .whitespaces),
-                        identity: identity.trimmingCharacters(in: .whitespaces)))
+                        identity: identity.trimmingCharacters(in: .whitespaces),
+                        displayName: name.isEmpty ? nil : name))
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

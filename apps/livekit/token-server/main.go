@@ -25,6 +25,7 @@ func main() {
 	http.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		room := r.URL.Query().Get("room")
 		identity := r.URL.Query().Get("identity") // Participant UUID from the app
+		name := r.URL.Query().Get("name")         // optional display name (M10)
 		if room == "" || identity == "" {
 			http.Error(w, "missing required query params: room, identity", http.StatusBadRequest)
 			return
@@ -40,6 +41,11 @@ func main() {
 			SetVideoGrant(grant).
 			SetIdentity(identity).
 			SetValidFor(time.Hour) // short-lived: expires ~1h after mint
+		// Display name (M10) → LiveKit participant.name, distributed to everyone incl.
+		// late joiners. Optional: only set when the client supplied one.
+		if name != "" {
+			at = at.SetName(name)
+		}
 
 		token, err := at.ToJWT()
 		if err != nil {

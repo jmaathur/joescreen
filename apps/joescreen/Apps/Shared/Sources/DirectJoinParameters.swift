@@ -22,11 +22,16 @@ public struct DirectJoinParameters: Sendable, Equatable {
     public var room: String
     /// Participant identity string — becomes the JWT `sub`. Defaults to a fresh UUID per launch.
     public var identity: String
+    /// Human-readable display name (M10) → the JWT `name` claim → LiveKit `participant.name`, which the
+    /// SFU distributes to everyone incl. late joiners. `nil` ⇒ peers fall back to the 4-char UUID label.
+    public var displayName: String?
 
-    public init(serverURL: URL, room: String, identity: String = UUID().uuidString) {
+    public init(serverURL: URL, room: String, identity: String = UUID().uuidString,
+                displayName: String? = nil) {
         self.serverURL = serverURL
         self.room = room
         self.identity = identity
+        self.displayName = displayName
     }
 
     /// The identity parsed back to a `ParticipantID`, or `nil` if it isn't a UUID. The media plane
@@ -42,24 +47,20 @@ public struct DirectJoinParameters: Sendable, Equatable {
     /// `--join-url ws://localhost:7880` alone is a valid zero-config join.
     public static func fromLaunchArguments(_ args: [String]) -> DirectJoinParameters? {
         var values: [String: String] = [:]
+        let known = ["--join-url", "--room", "--identity", "--name"]
         var i = 0
         while i < args.count {
             let a = args[i]
-            switch a {
-            case "--join-url", "--room", "--identity":
+            if known.contains(a) {
                 // Support both "--flag value" and "--flag=value".
                 if i + 1 < args.count, !args[i + 1].hasPrefix("--") {
                     values[a] = args[i + 1]
                     i += 2
                     continue
                 }
-            default:
-                if let eq = a.range(of: "="), a.hasPrefix("--") {
-                    let key = String(a[a.startIndex..<eq.lowerBound])
-                    if key == "--join-url" || key == "--room" || key == "--identity" {
-                        values[key] = String(a[eq.upperBound...])
-                    }
-                }
+            } else if let eq = a.range(of: "="), a.hasPrefix("--") {
+                let key = String(a[a.startIndex..<eq.lowerBound])
+                if known.contains(key) { values[key] = String(a[eq.upperBound...]) }
             }
             i += 1
         }
@@ -68,7 +69,8 @@ public struct DirectJoinParameters: Sendable, Equatable {
         }
         let room = values["--room"] ?? "demo"
         let identity = values["--identity"] ?? UUID().uuidString
-        return DirectJoinParameters(serverURL: url, room: room, identity: identity)
+        let name = values["--name"].flatMap { $0.isEmpty ? nil : $0 }
+        return DirectJoinParameters(serverURL: url, room: room, identity: identity, displayName: name)
     }
 
     // MARK: - URL scheme
@@ -92,7 +94,8 @@ public struct DirectJoinParameters: Sendable, Equatable {
         }
         let room = value(["room"]) ?? "demo"
         let identity = value(["identity"]) ?? UUID().uuidString
-        return DirectJoinParameters(serverURL: server, room: room, identity: identity)
+        let name = value(["name"])
+        return DirectJoinParameters(serverURL: server, room: room, identity: identity, displayName: name)
     }
 
     /// Render a shareable `joescreen://join?…` deep link for this set of parameters (identity is
@@ -106,6 +109,7 @@ public struct DirectJoinParameters: Sendable, Equatable {
             URLQueryItem(name: "room", value: room),
         ]
         if includeIdentity { items.append(URLQueryItem(name: "identity", value: identity)) }
+        if let displayName, !displayName.isEmpty { items.append(URLQueryItem(name: "name", value: displayName)) }
         comps.queryItems = items
         return comps.url
     }

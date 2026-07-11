@@ -9,6 +9,8 @@ struct ViewerJoinSheet: View {
     @State private var serverURL = "ws://localhost:7880"
     @State private var room = "demo"
     @State private var identity = UUID().uuidString
+    // Display name (M10): defaults to the device name; peers see it on tiles + roster.
+    @State private var displayName = UIDevice.current.name
 
     private var parsedURL: URL? { URL(string: serverURL.trimmingCharacters(in: .whitespaces)) }
     private var canJoin: Bool {
@@ -19,6 +21,9 @@ struct ViewerJoinSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("You") {
+                    TextField("Your name", text: $displayName)
+                }
                 Section("Server") {
                     TextField("Server URL", text: $serverURL)
                         .textInputAutocapitalization(.never)
@@ -47,10 +52,12 @@ struct ViewerJoinSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Join") {
                         guard let url = parsedURL else { return }
+                        let name = displayName.trimmingCharacters(in: .whitespaces)
                         model.requestJoin(DirectJoinParameters(
                             serverURL: url,
                             room: room.trimmingCharacters(in: .whitespaces),
-                            identity: identity.trimmingCharacters(in: .whitespaces)))
+                            identity: identity.trimmingCharacters(in: .whitespaces),
+                            displayName: name.isEmpty ? nil : name))
                         dismiss()
                     }
                     .disabled(!canJoin)

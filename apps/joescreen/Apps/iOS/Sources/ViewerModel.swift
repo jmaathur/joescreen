@@ -44,10 +44,11 @@ public final class ViewerModel {
 
     private func connect(_ params: DirectJoinParameters) async {
         #if DEBUG
-        let token = DevTokenMinter.mint(identity: params.identity, room: params.room)
+        let token = DevTokenMinter.mint(identity: params.identity, room: params.room, name: params.displayName)
         #else
         let token: String
-        do { token = try await TokenClient.fetch(server: params.serverURL, room: params.room, identity: params.identity) }
+        do { token = try await TokenClient.fetch(server: params.serverURL, room: params.room,
+                                                 identity: params.identity, name: params.displayName) }
         catch { phase = .failed("token: \(error)"); return }
         #endif
 
