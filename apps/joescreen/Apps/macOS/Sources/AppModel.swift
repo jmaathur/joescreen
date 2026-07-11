@@ -183,12 +183,32 @@ public final class AppModel {
     }
 
     public func requestJoin(_ params: DirectJoinParameters) {
+        // Clear any per-session UI/state orphaned from a PRIOR session before reconnecting. "Try Again"
+        // (after a .failed) and re-joins call this directly WITHOUT going through teardown(), so a
+        // display share's red border overlay (and share bookkeeping) from the old session would survive
+        // into the new one — the "red outline still on screen but no longer sharing" bug. teardown()
+        // hides it, but the retry path skips teardown, so reset it here too.
+        resetLocalShareState()
         joinParameters = params
         localParticipantID = params.participantID
         showJoinSheet = false
         phase = .connecting
         recordRecent(params) // menu-bar "Recent" list (backlog #5)
         Task { await connect(params) }
+    }
+
+    /// Tear down the sharer's own local-share affordances + bookkeeping (border overlay, chip, capture
+    /// registries). Safe to call when not sharing (all no-ops). Used by both a fresh join (clear a
+    /// prior session's orphans) and teardown. Does NOT touch the transport/room — callers own that.
+    private func resetLocalShareState() {
+        borderOverlay.hide()
+        isSharingDisplay = false
+        for (_, capture) in localCaptures { Task { await capture.stop() } }
+        localCaptures.removeAll()
+        localWindowTracks.removeAll()
+        localShareKinds.removeAll()
+        localShareBitrates.removeAll()
+        shareContext = ShareContext()
     }
 
     // MARK: - Recents (backlog #5)
@@ -1267,6 +1287,7 @@ public final class AppModel {
 
     /// Tear down a share that failed to start or was refused — no dangling capture, context rolled back.
     private func teardownFailedShare(_ windowID: WindowID) async {
+        let wasDisplay = localShareKinds[windowID] == .display
         if let capture = localCaptures[windowID] { await capture.stop() }
         localCaptures[windowID] = nil
         localWindowTracks[windowID] = nil
@@ -1274,6 +1295,12 @@ public final class AppModel {
         localShareBitrates[windowID] = nil
         await transport.unpublishVideoTrack(for: windowID)
         await pushShareContext(shareContext) // exclude the failed share
+        // Defensive: a failed display share must never leave its border/chip up (belt-and-braces —
+        // today they're only turned on after admission succeeds, past this path, but keep it robust).
+        if wasDisplay {
+            borderOverlay.hide()
+            isSharingDisplay = shareContext.displayShareCount > 0
+        }
     }
 
     /// Dismiss the admission-refusal alert.
@@ -1368,7 +1395,15 @@ public final class AppModel {
     }
 
     private func unshareAsync(_ windowID: WindowID) async {
-        guard let me = localParticipantID, room.owner(of: windowID) == me else { return }
+        // Ownership check for the ROOM/broadcast side. But if we hold LOCAL share bookkeeping for this
+        // window (localShareKinds), we ALWAYS tear down our own capture + affordances — even if `room`
+        // no longer agrees we own it (a snapshot or reconnect may have dropped it from room state).
+        // Otherwise a display share's capture + red border would orphan (the "border still on screen but
+        // not sharing" bug). We only skip the room mutation / broadcast when we're not the room owner.
+        let weOwnLocally = localShareKinds[windowID] != nil
+        let ownsInRoom = localParticipantID != nil && room.owner(of: windowID) == localParticipantID
+        guard weOwnLocally || ownsInRoom else { return }
+        // Always stop OUR capture + clear OUR bookkeeping (the affordance/orphan fix).
         if let capture = localCaptures[windowID] { await capture.stop() }
         localCaptures[windowID] = nil
         localWindowTracks[windowID] = nil
@@ -1376,18 +1411,22 @@ public final class AppModel {
         localShareKinds[windowID] = nil
         localShareBitrates[windowID] = nil
         await transport.unpublishVideoTrack(for: windowID)
-        room.removeShare(windowID)
         // Update the structural context (removing this share) so any remaining tracks reflect it (a
         // window track may renegotiate VP9↔H.264 as the display share leaves).
         shareContext = shareContext.removing(kind)
         await pushShareContext(shareContext)
-        // Display-share teardown: hide the sharer border + clear the chip.
+        // Display-share teardown: hide the sharer border + clear the chip. ALWAYS, so the red border
+        // can't outlive the share even when room state already dropped it.
         if kind == .display {
             borderOverlay.hide()
             isSharingDisplay = shareContext.displayShareCount > 0
         }
-        broadcastState()
-        broadcastShareEvent(.unshared, windowID: windowID, owner: me)
+        // Room mutation + broadcast only when we're the ROOM owner (skip if room already dropped us).
+        if ownsInRoom, let me = localParticipantID {
+            room.removeShare(windowID)
+            broadcastState()
+            broadcastShareEvent(.unshared, windowID: windowID, owner: me)
+        }
     }
 
     private func setLocalPause(_ windowID: WindowID, _ state: RoomModel.PauseState) {
