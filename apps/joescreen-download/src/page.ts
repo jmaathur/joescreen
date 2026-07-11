@@ -35,8 +35,8 @@ function changelogSection(releases: Release[]): string {
 }
 
 // The landing page HTML, inlined so the worker has no build step / asset pipeline.
-export function landingPage(opts: { version: string; releases?: Release[] }): string {
-	const { version, releases = [] } = opts;
+export function landingPage(opts: { version: string; releases?: Release[]; testflightURL?: string }): string {
+	const { version, releases = [], testflightURL } = opts;
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -85,6 +85,12 @@ export function landingPage(opts: { version: string; releases?: Release[] }): st
   }
   .cta:hover { transform: translateY(-1px); box-shadow: 0 12px 34px rgba(76,52,204,0.55); }
   .cta svg { width: 20px; height: 20px; }
+  .cta-row { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; }
+  .cta.secondary {
+    background: transparent; color: var(--text);
+    border: 1px solid var(--border); box-shadow: none; font-weight: 600;
+  }
+  .cta.secondary:hover { background: var(--panel); box-shadow: none; transform: translateY(-1px); }
   .meta { margin-top: 16px; color: var(--muted); font-size: 13px; }
   .meta code { color: var(--text); background: var(--panel); padding: 2px 7px; border-radius: 6px; border: 1px solid var(--border); }
   .features { margin: 56px auto 0; display: grid; grid-template-columns: 1fr; gap: 14px; text-align: left; max-width: 560px; }
@@ -114,13 +120,22 @@ export function landingPage(opts: { version: string; releases?: Release[] }): st
     <h1>JoeScreen</h1>
     <p class="tagline">Share individual app windows over a live call — each one appears on every desktop as a real, movable window, with per-window cursors and voice.</p>
 
-    <a class="cta" href="/download" download>
-      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      Download for macOS
-    </a>
-    <div class="meta">Version <code>${version}</code> · Apple Silicon &amp; Intel · macOS 14+ · notarized</div>
+    <div class="cta-row">
+      <a class="cta" href="/download" download>
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Download for macOS
+      </a>${testflightURL ? `
+      <a class="cta secondary" href="${esc(testflightURL)}" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M12 2 3 7v10l9 5 9-5V7l-9-5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M12 7v10M8.5 9.5 12 7l3.5 2.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        iOS beta on TestFlight
+      </a>` : ""}
+    </div>
+    <div class="meta">Version <code>${esc(version)}</code> · Apple Silicon &amp; Intel · macOS 14+ · notarized${testflightURL ? ` · iOS is a viewer + voice client` : ""}</div>
 
     <section class="features">
       <div class="feature"><h3>Real native windows</h3><p>Shared windows aren't a screenshare rectangle — they're live, movable windows on your desktop.</p></div>

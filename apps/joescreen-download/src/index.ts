@@ -9,6 +9,8 @@ type Bindings = {
 	DMG_KEY: string;
 	APP_VERSION: string;
 	ENVIRONMENT: string;
+	// Public TestFlight join link for the iOS beta. Empty ⇒ the iOS button is hidden.
+	TESTFLIGHT_URL?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -16,7 +18,11 @@ const app = new Hono<{ Bindings: Bindings }>();
 // Landing page. The changelog module is the single source of truth for the version + "What's new"
 // history; APP_VERSION (env) is only a fallback if the release list is somehow empty.
 app.get("/", (c) => {
-	return c.html(landingPage({ version: CURRENT_VERSION || c.env.APP_VERSION, releases: RELEASES }));
+	return c.html(landingPage({
+		version: CURRENT_VERSION || c.env.APP_VERSION,
+		releases: RELEASES,
+		testflightURL: c.env.TESTFLIGHT_URL,
+	}));
 });
 
 // Stream the notarized .dmg from R2. HEAD is supported so the page can show the size.
