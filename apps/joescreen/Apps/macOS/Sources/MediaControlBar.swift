@@ -41,6 +41,19 @@ struct MediaControlBar: View {
                 onSelect: { model.selectVideoInput($0) },
                 onMenuOpen: { Task { await model.refreshVideoInputs() } })
 
+            // Clipboard sync toggle (F6): session-scoped, default OFF. On → the clipboard is shared.
+            Button {
+                model.setClipboardSyncEnabled(!model.clipboardSyncEnabled)
+            } label: {
+                Image(systemName: model.clipboardSyncEnabled ? "doc.on.clipboard.fill" : "doc.on.clipboard")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(model.clipboardSyncEnabled ? Color.accentColor : Color.secondary)
+                    .frame(width: 34, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(model.clipboardSyncEnabled ? "Clipboard sharing ON (this session) — click to stop" : "Share clipboard with the room (this session only)")
+
             // "Sharing Display" chip with a stop button (M11), shown only while sharing a screen.
             if model.isSharingDisplay {
                 HStack(spacing: 6) {

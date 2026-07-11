@@ -128,6 +128,10 @@ public final class AppModel {
     public private(set) var secureInputBanner: SecureInputBanner = .none
     private var inputPump: InputPump?
 
+    /// Cross-user clipboard sync (F6, backlog #3). SESSION-SCOPED, default OFF, NEVER persisted
+    /// (DECISIONS §5.5 — security posture wins). Drives the control-bar toggle.
+    public private(set) var clipboardSyncEnabled = false
+
     // MARK: - Collaborators
 
     private let transport = LiveKitTransport()
@@ -135,6 +139,7 @@ public final class AppModel {
     private let borderOverlay = ShareBorderOverlay()
     private var stateChannel: (any WireDataChannel)?
     private var cursorPump: CursorPump?
+    private var clipboardPump: ClipboardPump?
 
     private var launchJoin: DirectJoinParameters?
     private var launchJoinFired = false
@@ -268,6 +273,9 @@ public final class AppModel {
             // control requests now, and injects once the grant + strategy spike land.
             let input = try await transport.openDataChannel(.input)
             startInputPump(input)
+            // Prepare the clipboard pump (F6) — created but DISABLED (session-scoped, default OFF).
+            let clipboard = try await transport.openDataChannel(.clipboard)
+            clipboardPump = ClipboardPump(channel: clipboard, localID: localParticipantID)
             phase = .inCall
             // Seed the local participant into the roster immediately.
             if let me = localParticipantID { participants.insert(me) }
@@ -336,6 +344,9 @@ public final class AppModel {
         stateChannel = nil
         cursorPump = nil
         inputPump = nil
+        clipboardPump?.stop()
+        clipboardPump = nil
+        clipboardSyncEnabled = false
         activeDriver = nil
         pendingControlRequest = nil
         secureInputBanner = .none
@@ -487,6 +498,14 @@ public final class AppModel {
     /// The display label for the current driver (for the "X is driving" badge), or nil.
     public var activeDriverLabel: String? {
         activeDriver.map { displayLabel(for: $0) }
+    }
+
+    // MARK: - Clipboard sync (F6)
+
+    /// Toggle cross-user clipboard sync for THIS session (never persisted). Off → no polling, no send.
+    public func setClipboardSyncEnabled(_ on: Bool) {
+        clipboardSyncEnabled = on
+        clipboardPump?.setEnabled(on)
     }
 
     /// Apply an inbound `state`-channel payload: a RoomSnapshot (full state, revision-gated) or a
