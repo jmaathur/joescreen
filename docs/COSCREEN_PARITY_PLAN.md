@@ -477,3 +477,33 @@ exact expected outcomes.
   → paste the id into `wrangler.jsonc`; `wrangler secret put LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`;
   set the real `LIVEKIT_URL`/`LIVEKIT_API_URL`; `bun run deploy` (serves `rooms.cheffing.dev`). See
   `apps/joescreen-rooms/README.md`.
+
+### Backlog #8 — Browser view-only join
+- **TESTING.md: Safari VP9 decode of single-window shares (D5)** (~10 min, deployed Worker + a live
+  room). Confirm the `/watch/<slug>` page renders a VP9 window share in Safari; the escape hatch is
+  the structural H.264 path (a second share flips all tracks to H.264). Needs backlog #7 deployed.
+
+### Backlog #10 — Hover "Share" tab
+- **SPIKE: Phase-0 R4 prompt-cadence** (~30 min, 1 macOS-15 Mac). Determine whether a NON-picker
+  capture of the hovered window re-prompts for Screen Recording on macOS 15. If it doesn't, flip
+  `HoverShareController.strategy` to `.direct` (the tab captures the hovered window straight away);
+  if it does, keep `.picker` (the tab opens the system picker — already the shipped default).
+
+### Backlog #11 — Slack deep-link lite
+- **Covered by #5 (copy invite link) + #7 (OpenGraph unfurl).** The `/r/<slug>` page carries og:title/
+  og:description/og:url, so Slack/iMessage unfurl it richly; the menu-bar "Copy Invite Link" copies a
+  shareable link. The FULL Slack app (slash commands, bot) is deferred per the plan. No further
+  human-gated slice beyond deploying #7.
+
+### Backlog #12 — CoTerm-lite terminal (F12, defer-last)
+- **SPIKE: PTY host** (~2–4 h, 1 Mac). `posix_openpt`/`grantpt`/`unlockpt` a real PTY on the host,
+  spawn a shell, stream raw bytes through `SecretRedactor` (built+tested) onto the `.terminal`
+  channel. This is the novel, XL, least-parity-critical item — the spike proves the host loop before
+  the renderer.
+- **DEP: uncomment SwiftTerm 1.13.0** (pre-pinned in Package.swift, commented) for the terminal
+  renderer — a dependency decision (record in DECISIONS.md when taken).
+- **WIRING: terminal pump** on the `.terminal` channel (`TerminalData`/`TerminalControl`), gated by
+  the pure `WriterArbiter` (built+tested now — one writer at a time, host-side gate, DISPLAY-only
+  `writerID` on the wire). iOS is a first-class terminal client (text, not injection).
+- Everything above the PTY host is machine-buildable once the spike + dep land; the `WriterArbiter`
+  arbitration seam is already done.
