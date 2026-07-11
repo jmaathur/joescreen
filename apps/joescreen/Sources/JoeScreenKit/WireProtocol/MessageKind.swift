@@ -18,6 +18,9 @@ public enum MessageKind: UInt16, Codable, Sendable, CaseIterable {
     // way to extend the protocol (never renumber existing tags).
     case roomSnapshot     = 11
     case shareEvent       = 12
+    // F4 remote control: a participant's request to drive a window (rides the input channel so it
+    // serializes with the input it gates). Appended — old peers decode nil and ignore.
+    case controlRequest   = 13
 
     /// The channel this kind MUST travel on, per the §3.2 matrix. This is the compile-time link
     /// between a payload and its reliability/ordering guarantees: there is no way to name a kind
@@ -28,7 +31,7 @@ public enum MessageKind: UInt16, Codable, Sendable, CaseIterable {
             return .cursor
         // Capability grants ride the SAME reliable/ordered channel as the input they authorize,
         // so a grant strictly precedes the first event it enables (spec wire-protocol table).
-        case .inputEvent, .capabilityGrant, .capabilityRevoke:
+        case .inputEvent, .capabilityGrant, .capabilityRevoke, .controlRequest:
             return .input
         case .clipboard:
             return .clipboard

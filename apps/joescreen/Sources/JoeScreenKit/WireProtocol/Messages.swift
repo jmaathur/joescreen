@@ -27,8 +27,59 @@ public struct CursorMove: WireMessage {
 
 // MARK: - Discrete input (reliable / ordered, seq-tracked)
 
-public enum InputEventKind: String, Codable, Sendable {
+/// The kind of a discrete input event. TOLERANT decoding (F4): a plain `String` enum THROWS on an
+/// unknown raw value, so an old peer would break the moment a newer peer sends `mouseMove`/`mouseDrag`
+/// (added for remote control). The custom Codable maps any unrecognized raw value to `.unsupported`
+/// so old peers decode + IGNORE it instead of failing the whole channel (the additive-only rule).
+public enum InputEventKind: Sendable, Equatable {
     case keyDown, keyUp, mouseDown, mouseUp, click, scroll
+    /// Remote-control additions (F4): a bare pointer move / a button-held drag.
+    case mouseMove, mouseDrag
+    /// An unknown raw value from a newer peer — decoded (never throws) and ignored by old logic.
+    case unsupported(String)
+
+    /// The wire string for this kind (round-trips through `unsupported`).
+    public var rawValue: String {
+        switch self {
+        case .keyDown: return "keyDown"
+        case .keyUp: return "keyUp"
+        case .mouseDown: return "mouseDown"
+        case .mouseUp: return "mouseUp"
+        case .click: return "click"
+        case .scroll: return "scroll"
+        case .mouseMove: return "mouseMove"
+        case .mouseDrag: return "mouseDrag"
+        case .unsupported(let raw): return raw
+        }
+    }
+
+    /// Total: any string decodes (unknown → `.unsupported`), so old peers never throw on a new kind.
+    public init(rawValue: String) {
+        switch rawValue {
+        case "keyDown": self = .keyDown
+        case "keyUp": self = .keyUp
+        case "mouseDown": self = .mouseDown
+        case "mouseUp": self = .mouseUp
+        case "click": self = .click
+        case "scroll": self = .scroll
+        case "mouseMove": self = .mouseMove
+        case "mouseDrag": self = .mouseDrag
+        default: self = .unsupported(rawValue)
+        }
+    }
+
+    /// Whether this build understands the kind (an `.unsupported` value is ignored by injection logic).
+    public var isKnown: Bool { if case .unsupported = self { return false }; return true }
+}
+
+extension InputEventKind: Codable {
+    public init(from decoder: any Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
 }
 
 public struct InputEvent: WireMessage {
@@ -44,6 +95,9 @@ public struct InputEvent: WireMessage {
     /// Scroll deltas (line/pixel) for `.scroll`.
     public var scrollDX: Double?
     public var scrollDY: Double?
+    /// Text to type (F4 text chunking): a run of characters injected as a unit. Optional +
+    /// `decodeIfPresent` (synthesized for optionals) so old peers decode nil, never break.
+    public var text: String?
 
     public init(
         eventKind: InputEventKind,
@@ -52,11 +106,25 @@ public struct InputEvent: WireMessage {
         keyCode: UInt16? = nil,
         modifiers: UInt32 = 0,
         scrollDX: Double? = nil,
-        scrollDY: Double? = nil
+        scrollDY: Double? = nil,
+        text: String? = nil
     ) {
         self.eventKind = eventKind; self.windowID = windowID; self.point = point
         self.keyCode = keyCode; self.modifiers = modifiers
-        self.scrollDX = scrollDX; self.scrollDY = scrollDY
+        self.scrollDX = scrollDX; self.scrollDY = scrollDY; self.text = text
+    }
+}
+
+/// A participant's request to drive a window (F4, wire kind 13). The owner surfaces a consent prompt;
+/// on approval it grants `.write` + sets Control mode. Appended kind — old peers decode nil/ignore.
+public struct ControlRequest: WireMessage {
+    public static let kind: MessageKind = .controlRequest
+    public var participantID: ParticipantID
+    public var windowID: WindowID
+    public enum Action: String, Codable, Sendable, Equatable { case request, release }
+    public var action: Action
+    public init(participantID: ParticipantID, windowID: WindowID, action: Action) {
+        self.participantID = participantID; self.windowID = windowID; self.action = action
     }
 }
 
