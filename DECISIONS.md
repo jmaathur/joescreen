@@ -189,6 +189,38 @@ SwiftTerm-rendered views on all peers (iOS is a full terminal client — text, n
 redaction (regex + Shannon-entropy) is applied BEFORE transmit in `SecretRedactor` (implemented +
 unit-tested), documented as best-effort and **never a security boundary.**
 
+## D15 — Receive-side window lifecycle is a pure reducer (M9)
+The correctness of "movable window shares" (no frozen ghosts, no duplicate windows on reopen, no
+SFU-blip flap, soft-hide releases downlink) lives in a pure `RemoteWindowLifecycle` reducer in
+JoeScreenKit — `reduce(state, event) → (state, [Effect])` — so every dead-window/desync bug class is
+an enumerable unit test and `AppModel` only executes effects. **Why:** the app layer can't be unit-
+tested (needs a window server + a second Mac + TCC), so the correctness must live below it in a
+testable seam. Two reversible sub-decisions recorded for the autonomous run (both softenable by a
+constant/flag later):
+- **Reconnect grace = 10 s.** When the media link is `.reconnecting`, a `trackGone` parks the viewer
+  in `.stale` (frozen frame + "Reconnecting…" badge) for 10 s before tear-down, so a brief SFU blip
+  doesn't flap the window closed. An authoritative snapshot-removal or owner-disconnect purges
+  immediately regardless (the share is really gone). `AppModel.reconnectGraceSeconds`.
+- **Belt-and-braces prune.** On a transport participant-set diff, a departed owner's windows also get
+  `ownerDisconnected` fed to the lifecycle and `room.pruneParticipant` (a **receiver-local cleanup
+  that never bumps `revision`** — the host stays the LWW authority), so a dropped SDK track-event
+  still tears their windows down. **Reversible:** it's additive to the trackGone path, never the sole
+  mechanism.
+- **"Follow New Shares" defaults OFF.** New viewer windows open with `orderFrontRegardless()` (never
+  steal focus); an opt-in session toggle switches to `makeKeyAndOrderFront`. The non-stealing default
+  is the reversible/least-surprising choice.
+
+## D16 — One `ShareTrackName` / `RemoteTrackDescriptor` contract (M9)
+Share track naming has exactly one implementation: `ShareTrackName` (JoeScreenKit), byte-identical to
+the pre-M9 `window:<uuid>` format, with `display:<uuid>` reserved additively for M11. The transport's
+`trackName(for:)`/`windowID(fromTrackName:)` delegate to it. The subscribe hook is the design panel's
+**superset** `RemoteTrackDescriptor {trackSID, trackName, sourceKind, ownerID?}`; the registry is
+keyed by **SID** (a name key overwrote two same-named camera tracks — latent bug #1). `trackGone`
+fires from **both** `didUnsubscribeTrack` and `didUnpublishTrack` (a locally-unsubscribed track fires
+only unpublish on a later crash — hooking one leaks), deduped per SID. **Why:** M10 (camera routing)
+and M11 (`display:`) both build on this one contract; a single implementation keeps the wire rule
+(extend-never-break) enforceable in one place.
+
 ---
 
 ### Derived per-codec QP bounds (D5)

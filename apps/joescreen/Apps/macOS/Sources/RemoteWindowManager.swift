@@ -222,6 +222,14 @@ final class RemoteWindowDelegate: NSObject, NSWindowDelegate {
 
     func windowDidDeminiaturize(_ notification: Notification) {
         onEvent(.miniaturized(false))
+        // Defense-in-depth (review hardening): AppKit does not guarantee a matching
+        // occlusion-state notification pairs with every miniaturize/deminiaturize, so reconcile the
+        // occluded flag from the window's ACTUAL occlusion state here. Without this, a miniaturize
+        // that also flipped occluded=true could leave the reducer stuck at .hidden (black) after
+        // restore if the occluded(false) notification never arrived.
+        if let window = notification.object as? NSWindow {
+            onEvent(.occluded(!window.occlusionState.contains(.visible)))
+        }
     }
 
     func windowDidChangeOcclusionState(_ notification: Notification) {

@@ -8,12 +8,14 @@ hardware says PENDING.
 
 ## Tier 1 — Machine sub-gate (owned by the agent)
 
-### Status: ✅ GREEN (2026-07-07)
+### Status: ✅ GREEN (2026-07-10, M9)
 
 ```
 swift build     → Build complete (6 library targets; JoeScreenKit at Swift 6 + StrictConcurrency,
                   JoeScreenLiveKit at Swift 5 per-target per D1)
-swift test      → Executed 117 tests, 5 skipped (integration + capture-TCC), 0 failures
+swift test      → Executed 195 tests, 7 skipped (integration + capture-TCC), 0 failures
+                  (120 pre-M9 + 75 new M9 Tier-1: ShareTrackName 8, ShareInfo 7, VideoFitMath 11,
+                  WindowCascade 8, ResizeStabilizer 8, RemoteWindowLifecycle 19, RoomModel shareInfo 14)
 ```
 
 5 tests SKIP (via `XCTSkip`, not fail) offline (landmine #7): the 4 `JoeScreenLiveKitTests`
@@ -68,6 +70,7 @@ capture, CGEvent injection) is scaffolded behind seams but its runtime behavior 
 | **M5** | Integration test asserts audio publication + cross-Room subscription WITHOUT opening the capture device | ✅ `VoiceIntegrationTests` (skips without `LIVEKIT_URL`): two live Rooms, the transport's audio-metadata accessors (`isAudioPublished`/`remoteAudioTrackCount`) are correctly wired to LiveKit's participant audio tracks (clean baseline with no mic). Publishing a REAL audio track was observed to HANG the headless host (WebRTC audio device module with no device/mic-TCC), so the machine gate is metadata-only per the gate's own wording. The app calls `setMicrophone(enabled:true)` on join. Superseding decision recorded in DECISIONS D13-A. **PENDING (human steps):** live-mic publish, cross-device audio subscription, and the audible check (mic TCC + speakers) — see H5 below. |
 | **M6** | Coalescing unit tests + cursor messages flowing in the two-instance demo | ✅ (unit) `CursorCoalescerTests` (7): outbound coalesce-to-latest per window, one-move-per-window, ignore-older-sample, flush-empties; inbound latest-wins, per-(sender,window) independence, forget-rebaselines. Wired: `RemoteVideoView.onContinuousHover` → `CursorPump.sendLocalCursor` (coalesced ~60 fps out) → `cursor` channel; inbound → `CursorOverlay` (click-through, `allowsHitTesting(false)`) renders every participant's pointer in its `ParticipantColor` at per-window normalized coords. **PENDING (with M4):** cursor messages flowing visibly in the live two-instance demo (needs the same Screen Recording grant to have a shared window to hover over). |
 | **M8** | `xcodebuild -scheme JoeScreen-iOS -destination 'generic/platform=iOS Simulator' build` + run in simulator | ✅ **BUILD SUCCEEDED**; the iOS app (`JoeScreen-iOS`, viewer + voice only — NO control/share, R6) builds for the simulator and **runs** — screenshot `docs/screenshots/m8-ios-viewer.png` shows the join sheet (server/room/identity) with the correct "iOS is a viewer + voice client. It cannot control or share windows." messaging, and a zoomable `SwiftUIVideoView` (pinch-zoom `.zoomIn/.zoomOut/.resetOnRelease`) page-tab for shared windows. **PENDING (same class as M4/M5):** the LIVE connect-and-render against the `--dev` server needs a tap on iOS's custom-URL-scheme confirmation dialog (SpringBoard modal; `simctl` has no tap primitive) — a human step. |
+| **M9** | `swift build && swift test` green (120 + new Tier-1); `xcodebuild -scheme JoeScreen-macOS build`; LiveKit integration suite green with `LIVEKIT_URL` | ✅ **`swift build && swift test` = 195 tests, 7 skipped, 0 failures** (75 new M9 Tier-1 suites: `ShareTrackNameTests` 8, `ShareInfoTests` 7, `VideoFitMathTests` 11, `WindowCascadeTests` 8, `ResizeStabilizerTests` 8, `RemoteWindowLifecycleTests` 19 incl. full every-event-in-every-state matrix, `RoomModelShareInfoTests` 14). **`xcodegen generate` + `xcodebuild JoeScreen-macOS` AND `JoeScreen-iOS` → BUILD SUCCEEDED**; the macOS app **launches and stays running** (no Killed:9) with the new `@Observable RemoteVideoWindow`, lifecycle-driven window manager, and Window-menu commands. **LiveKit integration suite vs live SFU** (`bun run livekit` from repo root, `LIVEKIT_URL=ws://localhost:7880 swift test --filter JoeScreenLiveKitTests`) → **8 tests, 0 failures**, incl. `testSyntheticVideoFrameFlowsAToB` (real VP9 encode→SFU→decode→render through the new `setOnRemoteTrack` descriptor hook). **Adversarial review** (3 lenses — Swift-6 concurrency, wire back-compat, R24/R32 subscription — + per-finding refutation): 2 raw findings, both addressed (the `.closedByUser`-leak was found+fixed pre-review; the soft-hide-stuck concern hardened by reconciling occlusion on deminiaturize). Lands: receive-side lifecycle reducer, SID-keyed registry (latent bug #1), trackGone dual hook incl. unpublish-is-authoritative (frozen-ghost fix), owner repair (latent bug #5), aspect-true windows, cursor letterbox mapping, WindowResizeWatcher, ShareInfo plumbing. **PENDING (Tier-2 hardware rows below):** the LIVE two-Mac correctness behaviors. |
 | **M7** | Compiles + unit tests against a `FakeSessionProvider`; runtime rows PENDING in the hardware run-book | ✅ (compiles + unit) `GroupSessionCoordinator: SessionProviding` + `GroupActivityPresenter` compile against the real GroupActivities framework (`prepareForActivation()` → `GroupActivityActivationResult` → `activate()`; `GroupActivitySharingController` presenter with `GroupStateObserver.isEligibleForGroupSession` fallback; `TransportBootstrap`/`CoordinationMessage` over `GroupSessionMessenger` via `SignalingSendQueue` retry/backoff; late-joiner re-broadcast; reuses `JoeScreenActivity`'s existing `GroupActivity` conformance — not re-declared). `SessionCoordinationTests` (6): bootstrap + room-snapshot wire round-trips (<200 KB), `FakeSessionProvider` start/join/fail/participant-stream/invalidation, bootstrap fits `SignalingSendQueue`. **PENDING (hardware, needs group-session entitlement + TEAM_ID + 2 devices/different iCloud accounts):** H1 runtime — see run-book. |
 
 ### Additional machine-gateable spikes (PENDING — single-device, no pairing)
@@ -114,6 +117,19 @@ second-camera frame-counter). **Target ≤ ~150 ms on a quiet LAN** for screen v
 | P1 | Broadcast-extension **peak RSS** under the ~50 MB ceiling at ≤720p (R7); behavior on device lock (R19). | RSS recorded; lock behavior noted. | PENDING |
 | P2 | `kTCCServicePostEvent` vs `kTCCServiceAccessibility` grant flows; Secure Event Input blocking a password field surfaces the "can't be remote-controlled" message (R8). | Both grants exercised; secure-input surfaced. | PENDING |
 | P3 | macOS 15+ recurring screen-recording prompt cadence with the `SCContentSharingPicker` path (R4). | Cadence observed + recorded. | PENDING |
+
+### M9 — Receive-side lifecycle correctness (Tier-2, all PENDING)
+
+| # | Procedure | Expected | Result |
+|---|---|---|---|
+| M9-1 | Mac A shares a window; Mac B renders it in a native window; **force-quit A** (or kill the sharer). | B's viewer window closes ≤2 s — **no frozen ghost**. (trackGone from unpublish → close+purge.) | PENDING |
+| M9-2 | B renders A's shared window; **close the viewer window on B**, then click **Reopen** (tile or Window menu). | Window closed (downlink cut, `set(subscribed:false)`); Reopen restores it **at the remembered frame** with **live video**, no duplicate window. | PENDING |
+| M9-3 | A shares a window; **resize the source window on A**. | B's viewer keeps the **new aspect ratio** within one `ResizeStabilizer` confirmation (~0.75 s settle), no mid-drag churn; letterbox stays correct. | PENDING |
+| M9-4 | **Two owners × two windows each** join and share. | Per-owner **cascade groups** (each owner's windows cluster; distinct owner anchors); all fully on-screen. | PENDING |
+| M9-5 | A shares a **portrait** window; B views on a **landscape** display (letterboxed). Hover the cursor over a feature at a known pixel. | Pointer tips **align on the same pixel feature** at both ends (VideoFitMath content-rect mapping; the pre-M9 drift is gone). | PENDING |
+| M9-6 | A shares; drop A's network briefly so the SFU link goes `.reconnecting` (do NOT unshare). | B's viewer shows a **"Reconnecting…" badge over the frozen frame** and stays open through the ~10 s grace; recovers to live on reconnect; only tears down if grace expires. | PENDING |
+| M9-7 | B **miniaturizes** (or fully occludes) A's viewer window, then restores it. | While hidden, the renderer detaches and adaptive-stream stops SFU forwarding (downlink drops) — verify via webrtc-internals; restore re-attaches (keyframe ≈0.5 s). `set(enabled:)` never called (R24). | PENDING |
+| M9-8 | A shares a window with a real title (e.g. an Xcode file) and app. | B's viewer window **title bar shows the window title + app + owner**, and the share tile is aspect-true before/at first frame (ShareInfo seed). | PENDING |
 
 **Reminder:** do not mark any Tier-2 row anything but PENDING until it is actually observed on
 hardware, with the method and numbers written into this file.

@@ -496,16 +496,19 @@ public actor LiveKitTransport: MediaTransport {
         }
     }
 
-    /// Delegate callback source: the SDK's unsubscribe. Report gone (deduped, self-suppressed).
+    /// Delegate callback source: the SDK's unsubscribe. May be self-inflicted (a local hard
+    /// unsubscribe for user-close) — suppressed via `locallyUnsubscribed`.
     func handleTrackUnsubscribed(trackSID: String) {
-        reportGone(trackSID: trackSID)
+        reportGone(trackSID: trackSID, viaUnpublish: false)
     }
 
-    /// Delegate callback source: the SDK's unpublish (the sharer stopped/crashed). Report gone. Only
-    /// hooking unsubscribe would leak: a locally-unsubscribed track fires ONLY unpublish on a later
-    /// sharer crash (verified) — so both paths funnel here.
+    /// Delegate callback source: the SDK's unpublish (the remote sharer stopped/crashed). This is
+    /// ALWAYS authoritative — we never unpublish a REMOTE track, so it is never self-inflicted. It
+    /// therefore reports gone even if the SID was locally unsubscribed (the sharer really left while
+    /// its viewer was closed — otherwise that entry would leak forever). Hooking unsubscribe alone
+    /// would miss this: a locally-unsubscribed track fires ONLY unpublish on a later crash (verified).
     func handleTrackUnpublished(trackSID: String) {
-        reportGone(trackSID: trackSID)
+        reportGone(trackSID: trackSID, viaUnpublish: true)
     }
 
     /// Dimension updates for a subscribed track (seeded at subscribe, then on didUpdateDimensions).
@@ -519,15 +522,18 @@ public actor LiveKitTransport: MediaTransport {
         handler(entry.descriptor, Int(dimensions.width), Int(dimensions.height))
     }
 
-    /// Fire the gone hook exactly once per SID, suppressing self-inflicted unsubscribes.
-    private func reportGone(trackSID: String) {
-        // A soft/hard local unsubscribe is not "the sharer disappeared" — swallow it (but do drop
-        // the registry entry so a later real gone still resolves cleanly).
-        if locallyUnsubscribed.contains(trackSID) {
-            // Keep the entry: a soft unsubscribe (renderer detach) may resubscribe the same SID; a
-            // hard user-close removed the window already. Either way, not a gone event.
+    /// Fire the gone hook exactly once per SID, suppressing self-inflicted unsubscribes but never a
+    /// real unpublish.
+    private func reportGone(trackSID: String, viaUnpublish: Bool) {
+        // A local hard unsubscribe (user-close) produces a self-inflicted UNSUBSCRIBE callback — swallow
+        // it (not "the sharer disappeared"). An UNPUBLISH is never self-inflicted for a remote track,
+        // so it always reports: the sharer genuinely left, even while its viewer was locally closed —
+        // otherwise the entry would leak forever (the closed-by-user Reopen tile would be stuck).
+        if !viaUnpublish && locallyUnsubscribed.contains(trackSID) {
             return
         }
+        // A confirmed unpublish clears the self-suppress mark so bookkeeping stays consistent.
+        locallyUnsubscribed.remove(trackSID)
         guard !reportedGone.contains(trackSID) else { return }
         reportedGone.insert(trackSID)
         guard let entry = remoteVideoTracks[trackSID] else {

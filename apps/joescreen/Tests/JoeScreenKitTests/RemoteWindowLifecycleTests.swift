@@ -77,12 +77,21 @@ final class RemoteWindowLifecycleTests: XCTestCase {
         XCTAssertEqual(l.state, .open)
     }
 
-    func testTrackGoneWhileClosedByUserIsInert() {
-        // The user already closed it; a late trackGone must not double-close or purge unexpectedly.
+    func testTrackGoneWhileClosedByUserPurgesTheStuckEntry() {
+        // The user closed it (reopenable entry kept). A REAL trackGone that reaches the reducer means
+        // the share genuinely ended (the self-unsubscribe echo is suppressed in the transport, so this
+        // isn't that) — the entry is no longer reopenable and must purge, not stick as a "Reopen" tile.
         var l = openLifecycle()
         l.reduce(.userClosed)
-        XCTAssertEqual(l.reduce(.trackGone(.trackEnded)), [])
-        XCTAssertEqual(l.state, .closedByUser)
+        XCTAssertEqual(l.reduce(.trackGone(.trackEnded)), [.purge])
+        XCTAssertEqual(l.state, .gone)
+    }
+
+    func testOwnerDisconnectWhileClosedByUserPurges() {
+        var l = openLifecycle()
+        l.reduce(.userClosed)
+        XCTAssertEqual(l.reduce(.ownerDisconnected), [.purge])
+        XCTAssertEqual(l.state, .gone)
     }
 
     func testUserCloseWhileSubscribingUnsubscribesOnly() {

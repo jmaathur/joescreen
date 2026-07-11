@@ -179,10 +179,17 @@ public struct RemoteWindowLifecycle: Sendable, Equatable {
     /// A terminal-ish gone signal. During reconnect it parks in `.stale`; otherwise it purges.
     private mutating func handleGone(_ reason: GoneReason) -> [Effect] {
         switch state {
-        case .gone, .closedByUser:
-            // Already terminal, or the user closed it — nothing to tear down. (A closedByUser entry
-            // whose owner leaves is cleaned up by the snapshot/participant path at the app level.)
+        case .gone:
+            // Already terminal — nothing to tear down.
             return []
+        case .closedByUser:
+            // The user closed the viewer (window already gone) but kept a REOPENABLE entry, which is
+            // only valid while the share still exists. Any gone signal that reaches here is real (the
+            // self-unsubscribe echo was suppressed in the transport), so the share is truly gone and
+            // there is nothing left to reopen → purge the entry (no window to close). Prevents a stuck
+            // "Reopen" tile for a share whose sharer crashed/left while its viewer was closed.
+            state = .gone
+            return [.purge]
         case .subscribing:
             if reconnecting && reason == .trackEnded {
                 state = .stale

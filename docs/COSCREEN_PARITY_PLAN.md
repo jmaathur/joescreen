@@ -398,3 +398,29 @@ one-paragraph rationale, choosing the reversible option when uncertain):
 4. DECISIONS.md updated when a milestone makes a choice this plan marks as open.
 5. Commit per ordered step (each step compiles); milestone summary commit message references
    this plan's section.
+
+---
+
+## Human TODO
+
+Work that genuinely needs a human (TCC grants, a second Mac, spikes) — deferred, never faked. Each
+entry: what to do, rough time, what it unblocks. The corresponding TESTING.md rows are PENDING with
+exact expected outcomes.
+
+### M9 — receive-side lifecycle (all need a real Screen-Recording grant; most need 2 Macs)
+- **TCC: grant Screen Recording to JoeScreen.app** (~1 min, once). Unblocks EVERY capture/share Tier-2
+  row (M9-1…M9-8, F1-F3). The `xctest` host can't hold this grant (transient CLI, error −3801); the
+  app path needs a human to click Allow in System Settings → Privacy → Screen Recording, then relaunch
+  (ad-hoc re-signing may re-prompt — R4).
+- **TESTING.md M9-1 sharer force-quit → viewer closes ≤2 s** (~5 min, 2 Macs). Verifies the trackGone
+  frozen-ghost fix live.
+- **TESTING.md M9-2 close-then-Reopen at remembered frame with live video** (~5 min, 2 Macs).
+- **TESTING.md M9-3 source resize keeps remote aspect within one stabilizer confirmation** (~5 min, 2 Macs).
+- **TESTING.md M9-4 two owners × two windows → per-owner cascade groups** (~10 min, 3 Macs or 2 Macs +
+  2 windows each).
+- **TESTING.md M9-5 letterbox cursor alignment (portrait on landscape viewer)** (~5 min, 2 Macs).
+- **TESTING.md M9-6 reconnect grace: badge over frozen frame, 10 s hold, recover** (~10 min, 2 Macs +
+  a way to blip the network).
+- **TESTING.md M9-7 miniaturize/occlude releases SFU downlink (webrtc-internals)** (~10 min, 2 Macs +
+  chrome://webrtc-internals or the SFU stats).
+- **TESTING.md M9-8 viewer title bar shows window title + app + owner; aspect-true tile** (~3 min, 2 Macs).
