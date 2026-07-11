@@ -1080,15 +1080,14 @@ public final class AppModel {
 
     private func startSharing(cgWindowID: CGWindowID) async {
         guard let me = localParticipantID else { return }
-        // Preflight Screen Recording so a missing grant triggers the system prompt deterministically
-        // (rather than an opaque -3801 from SCStream). CGRequestScreenCaptureAccess shows the prompt
-        // once; the user grants it, then rebuilds/relaunches (ad-hoc re-signing may re-prompt — R4).
-        let hasAccess = CGPreflightScreenCaptureAccess()
-        AppLog.info("startSharing cgWindowID=\(cgWindowID) screenCaptureAccess=\(hasAccess)")
-        if !hasAccess {
-            let granted = CGRequestScreenCaptureAccess()
-            AppLog.info("requested screen capture access → \(granted)")
-        }
+        // NOTE: we deliberately do NOT preflight with CGPreflightScreenCaptureAccess() /
+        // CGRequestScreenCaptureAccess() here. That CoreGraphics preflight uses a DIFFERENT TCC
+        // evaluation than ScreenCaptureKit (which is what actually captures), and routinely reports
+        // `false` even when the app IS granted Screen Recording in System Settings — firing a spurious
+        // "would like to record this computer's screen" prompt on every share. Instead we let
+        // SCShareableContent / SCStream.startCapture() be the sole authority: it succeeds when the
+        // grant is real, and throws (surfaced below) when it genuinely isn't. See handleScreenCaptureDenial.
+        AppLog.info("startSharing cgWindowID=\(cgWindowID)")
         // Encode-session cap is knowable up front — refuse BEFORE touching the codec context so a
         // capped share never renegotiates live tracks (no VP9→H.264→VP9 flicker).
         if let refusal = encodeCapRefusal() { shareRefusedReason = refusal; return }
@@ -1146,9 +1145,22 @@ public final class AppModel {
             AppLog.error("startSharing failed: \(String(describing: error))")
             if case WindowCaptureService.CaptureError.sensitiveApp = error {
                 shareRefusedReason = "That window belongs to a password manager or Keychain and can't be shared."
+            } else if isScreenRecordingDenied(error) {
+                shareRefusedReason = "JoeScreen needs Screen Recording permission. Enable it in System Settings › Privacy & Security › Screen Recording, then try again."
             }
             await teardownFailedShare(windowID)
         }
+    }
+
+    /// True if `error` is ScreenCaptureKit reporting a missing Screen Recording grant. SCStream's
+    /// `startCapture()` (and `SCShareableContent`) fail with `SCStreamError` code `.userDeclined`
+    /// (-3801) when TCC hasn't granted screen recording. We treat that as the authoritative "not
+    /// granted" signal (replacing the unreliable CGPreflightScreenCaptureAccess preflight) and show a
+    /// clear System-Settings hint — WITHOUT ever firing the redundant CGRequest prompt.
+    private func isScreenRecordingDenied(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == SCStreamError.errorDomain
+            && ns.code == SCStreamError.Code.userDeclined.rawValue
     }
 
     /// The structural encode-session cap check, knowable UP FRONT (before capture/pixels). Gating on
@@ -1239,9 +1251,9 @@ public final class AppModel {
         }
         // Encode-cap refusal up front (before the codec context flips live tracks → no flicker).
         if let refusal = encodeCapRefusal() { shareRefusedReason = refusal; return }
-        let hasAccess = CGPreflightScreenCaptureAccess()
-        AppLog.info("startSharingDisplay displayID=\(displayID) screenCaptureAccess=\(hasAccess)")
-        if !hasAccess { _ = CGRequestScreenCaptureAccess() }
+        // No CGPreflight/CGRequest preflight — it misreports the grant and fires a spurious prompt even
+        // when granted (see startSharing). SCStream.startCapture() is the authority; denial is caught below.
+        AppLog.info("startSharingDisplay displayID=\(displayID)")
 
         let windowID = WindowID()
         let capture = DisplayCaptureService(windowID: windowID, displayID: displayID)
@@ -1287,6 +1299,9 @@ public final class AppModel {
             broadcastShareEvent(.shared, windowID: windowID, owner: me, info: room.info(of: windowID))
         } catch {
             AppLog.error("startSharingDisplay failed: \(String(describing: error))")
+            if isScreenRecordingDenied(error) {
+                shareRefusedReason = "JoeScreen needs Screen Recording permission. Enable it in System Settings › Privacy & Security › Screen Recording, then try again."
+            }
             await teardownFailedShare(windowID)
         }
     }
