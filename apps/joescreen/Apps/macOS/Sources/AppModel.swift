@@ -3,6 +3,7 @@ import Observation
 import JoeScreenKit
 import JoeScreenLiveKit
 import JoeScreenCaptureMac
+import JoeScreenInputMac
 import ScreenCaptureKit
 import AVFoundation
 import LiveKit
@@ -108,6 +109,18 @@ public final class AppModel {
     private static let assumedUplinkBps: Double = 20_000_000
     /// Whether a share was refused by admission (drives a visible alert in the UI).
     public private(set) var shareRefusedReason: String?
+
+    // MARK: - Remote control (F4) — coordination-plane display state only (D12: authorization is
+    // owner-side against trusted local state, NOT these flags).
+
+    /// The participant currently driving one of MY shared windows (drives the "X is driving" badge).
+    /// nil when nobody is remote-controlling. Display-only.
+    public private(set) var activeDriver: ParticipantID?
+    /// A pending control request awaiting the owner's consent (drives a consent prompt). Display-only.
+    public private(set) var pendingControlRequest: ControlRequest?
+    /// The R8 secure-input banner state (shown when secure input blocks injection while driving).
+    public private(set) var secureInputBanner: SecureInputBanner = .none
+    private var inputPump: InputPump?
 
     // MARK: - Collaborators
 
@@ -242,6 +255,11 @@ public final class AppModel {
             self.cursorPump = pump
             windowManager.cursorPump = pump
             startCursorInPump(pump)
+            // Start the input pump (F4) on the reliable/ordered input channel. Owner-side injection is
+            // gated behind the kTCCServicePostEvent grant (human step); the pump receives + surfaces
+            // control requests now, and injects once the grant + strategy spike land.
+            let input = try await transport.openDataChannel(.input)
+            startInputPump(input)
             phase = .inCall
             // Seed the local participant into the roster immediately.
             if let me = localParticipantID { participants.insert(me) }
@@ -309,6 +327,10 @@ public final class AppModel {
         mediaState = .disconnected
         stateChannel = nil
         cursorPump = nil
+        inputPump = nil
+        activeDriver = nil
+        pendingControlRequest = nil
+        secureInputBanner = .none
         showJoinSheet = true
     }
 
@@ -392,6 +414,71 @@ public final class AppModel {
                 self?.windowManager.updateRemoteCursor(windowID: windowID, participant: participantID, point: point)
             }
         })
+    }
+
+    // MARK: - Remote control (F4)
+
+    private func startInputPump(_ channel: any WireDataChannel) {
+        // The owner-state + bounds providers are captured weakly via the pump's @Sendable closures.
+        // NOTE: full owner-state (capability grants + real window bounds) is wired as consent lands;
+        // for now the authorizer defaults to remote-control-DISABLED, so nothing injects until the
+        // owner explicitly grants — the safe default (D12: Watch is default, master switch off).
+        let pump = InputPump(
+            channel: channel,
+            localID: localParticipantID,
+            ownerStateProvider: { InputAuthorizer.OwnerState(remoteControlEnabled: false) },
+            boundsProvider: { _ in nil })
+        self.inputPump = pump
+        pumps.append(Task { @MainActor [weak self] in
+            await pump.runInbound(onControlRequest: { req in
+                self?.handleControlRequest(req)
+            })
+        })
+        // Secure-input polling (R8): a debounced 1s tick updates the banner while someone is driving.
+        pumps.append(Task { @MainActor [weak self] in
+            let detector = SecureInputDetector()
+            while !Task.isCancelled {
+                let active = detector.isSecureInputActive()
+                self?.updateSecureInputBanner(secureInputActive: active)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        })
+    }
+
+    private func handleControlRequest(_ req: ControlRequest) {
+        switch req.action {
+        case .request:
+            // Only prompt if it targets one of MY windows.
+            guard room.owner(of: req.windowID) == localParticipantID else { return }
+            pendingControlRequest = req
+        case .release:
+            if activeDriver == req.participantID { activeDriver = nil }
+            pendingControlRequest = nil
+            updateSecureInputBanner(secureInputActive: false)
+        }
+    }
+
+    /// Owner approves a pending control request → record the driver (display badge). The actual
+    /// injection grant (enabling remoteControl + a .write capability) lands with the consent-UI wiring;
+    /// this drives the "X is driving" badge and the request flow now.
+    public func approveControlRequest() {
+        guard let req = pendingControlRequest else { return }
+        activeDriver = req.participantID
+        pendingControlRequest = nil
+    }
+
+    public func denyControlRequest() {
+        pendingControlRequest = nil
+    }
+
+    private func updateSecureInputBanner(secureInputActive: Bool) {
+        secureInputBanner = SecureInputBanner.decide(
+            secureInputActive: secureInputActive, someoneIsDriving: activeDriver != nil)
+    }
+
+    /// The display label for the current driver (for the "X is driving" badge), or nil.
+    public var activeDriverLabel: String? {
+        activeDriver.map { displayLabel(for: $0) }
     }
 
     /// Apply an inbound `state`-channel payload: a RoomSnapshot (full state, revision-gated) or a

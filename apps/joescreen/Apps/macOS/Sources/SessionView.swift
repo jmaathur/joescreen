@@ -12,6 +12,8 @@ struct SessionView: View {
     var body: some View {
         VStack(spacing: 0) {
             ConnectionBanner()
+            // Remote-control status (F4): "X is driving" badge + the R8 secure-input notice.
+            RemoteControlBanner()
             Divider()
             // The "see everyone" strip (M10): self tile + one per participant, between the banner
             // and the roster/shares split. Hidden until there's someone/something to show.
@@ -46,6 +48,45 @@ struct SessionView: View {
         } message: {
             Text(model.shareRefusedReason ?? "")
         }
+        // Remote-control consent (F4): the owner approves/denies a peer's request to drive a window.
+        .alert("Allow remote control?", isPresented: Binding(
+            get: { model.pendingControlRequest != nil },
+            set: { if !$0 { model.denyControlRequest() } })) {
+            Button("Allow") { model.approveControlRequest() }
+            Button("Deny", role: .cancel) { model.denyControlRequest() }
+        } message: {
+            if let req = model.pendingControlRequest {
+                Text("\(model.displayLabel(for: req.participantID)) wants to control your shared window.")
+            }
+        }
+    }
+}
+
+/// The remote-control status banner (F4): "X is driving" while a peer controls one of your windows,
+/// plus the R8 secure-input notice when secure input is blocking injection.
+struct RemoteControlBanner: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let driver = model.activeDriverLabel {
+                banner("\(driver) is controlling your screen", systemImage: "hand.point.up.left.fill", tint: .blue)
+            }
+            if model.secureInputBanner == .secureInputBlocking {
+                banner("This field can't be remote-controlled (secure input is active).",
+                       systemImage: "lock.fill", tint: .orange)
+            }
+        }
+    }
+
+    private func banner(_ text: String, systemImage: String, tint: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage).foregroundStyle(tint)
+            Text(text).font(.caption.weight(.medium))
+            Spacer()
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(tint.opacity(0.12))
     }
 }
 
