@@ -141,6 +141,9 @@ struct SharedWindowsCommands: Commands {
             Toggle("Follow New Shares", isOn: Binding(
                 get: { model.followNewShares },
                 set: { model.setFollowNewShares($0) }))
+            Toggle("Hover to Share", isOn: Binding(
+                get: { model.hoverShareEnabled },
+                set: { model.setHoverShareEnabled($0) }))
         }
     }
 

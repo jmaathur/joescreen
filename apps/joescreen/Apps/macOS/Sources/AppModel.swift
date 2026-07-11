@@ -135,6 +135,10 @@ public final class AppModel {
     /// Replicated annotation ink (F9, backlog #9). Observed by the DrawOverlay; mutated by the pump.
     let drawState = DrawState()
     private var drawPump: DrawPump?
+
+    /// Hover "Share" tab (F/backlog #10). Session-scoped, default OFF; R4-safe (picker) until the spike.
+    public private(set) var hoverShareEnabled = false
+    @ObservationIgnored private var hoverShare: HoverShareController!
     /// The local author's monotonic draw sequence — assigned HERE (MainActor) so the optimistic
     /// local apply and the transmitted op carry the SAME seq (no duplicate on the inbound echo).
     private var drawSequencer = DrawAuthorSequencer()
@@ -163,6 +167,7 @@ public final class AppModel {
         self.autoShareDisplayID = autoShareDisplayID
         if launchJoin != nil { self.showJoinSheet = false }
         windowManager.model = self
+        hoverShare = HoverShareController(model: self)
     }
 
     // MARK: - Join entry points
@@ -394,6 +399,8 @@ public final class AppModel {
         drawPump = nil
         drawSequencer = DrawAuthorSequencer()
         drawState.reset()
+        hoverShare.setEnabled(false)
+        hoverShareEnabled = false
         activeDriver = nil
         pendingControlRequest = nil
         secureInputBanner = .none
@@ -573,6 +580,13 @@ public final class AppModel {
 
     /// Toggle local draw mode (capture strokes vs. pass hover through).
     public func toggleDrawMode() { drawState.drawModeEnabled.toggle() }
+
+    /// Toggle the hover "Share" tab (backlog #10). Session-scoped; R4-safe (opens the picker) until
+    /// the Phase-0 R4 prompt-cadence spike flips HoverShareController.strategy to .direct.
+    public func setHoverShareEnabled(_ on: Bool) {
+        hoverShareEnabled = on
+        hoverShare.setEnabled(on)
+    }
 
     /// Send a completed local stroke (from the DrawOverlay drag) in the local participant's color.
     /// The seq is assigned HERE so the optimistic local apply and the transmitted op are identical —
