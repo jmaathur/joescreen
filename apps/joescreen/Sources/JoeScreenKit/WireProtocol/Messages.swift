@@ -196,8 +196,13 @@ public struct ShareEvent: WireMessage {
     public var ownerID: ParticipantID
     /// The `RoomModel.revision` at which this event took effect (for ordering against snapshots).
     public var revision: UInt64
-    public init(action: Action, windowID: WindowID, ownerID: ParticipantID, revision: UInt64) {
+    /// Advisory metadata for the share (title/app/source pixels/kind). Optional + `decodeIfPresent`
+    /// (Swift synthesizes it for optionals): an old peer that predates this field decodes it to
+    /// `nil` — additive-only, never breaks (§2). Present on `.shared`; `nil` on `.unshared`.
+    public var info: ShareInfo?
+    public init(action: Action, windowID: WindowID, ownerID: ParticipantID, revision: UInt64,
+                info: ShareInfo? = nil) {
         self.action = action; self.windowID = windowID
-        self.ownerID = ownerID; self.revision = revision
+        self.ownerID = ownerID; self.revision = revision; self.info = info
     }
 }

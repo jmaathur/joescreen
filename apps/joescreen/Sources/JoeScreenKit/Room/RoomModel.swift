@@ -40,6 +40,12 @@ public struct RoomModel: Codable, Sendable, Equatable {
     /// Pause state per shared window. Defaults to `.live` when a share is added.
     public private(set) var pauseStates: [WindowID: PauseState]
 
+    /// Advisory descriptive metadata per shared window (title/app/source pixels/kind), mirrored so
+    /// receivers can title + aspect-size a viewer window before the first frame (M9). Additive: an
+    /// old peer's snapshot lacks it (decodes to `[:]`); a lie here gains a peer nothing (UI only).
+    /// Cascade-cleared alongside a window's other state on share/participant removal.
+    public private(set) var shareInfo: [WindowID: ShareInfo]
+
     /// Monotonic snapshot revision. Starts at 0 for an empty room; strictly increases with every
     /// effective mutation. Wrapping addition is used defensively but a UInt64 never wraps in
     /// practice.
@@ -50,7 +56,37 @@ public struct RoomModel: Codable, Sendable, Equatable {
         self.controlModes = [:]
         self.writeAccess = [:]
         self.pauseStates = [:]
+        self.shareInfo = [:]
         self.revision = 0
+    }
+
+    // MARK: - Codable (explicit, so `shareInfo` is additive/back-compat)
+
+    // Key names are IDENTICAL to the pre-`shareInfo` synthesized names, so old snapshots round-trip
+    // byte-for-byte and the new field is purely additive (decodeIfPresent → [:] for old peers).
+    enum CodingKeys: String, CodingKey {
+        case shares, controlModes, writeAccess, pauseStates, shareInfo, revision
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.shares = try c.decode([WindowID: ParticipantID].self, forKey: .shares)
+        self.controlModes = try c.decode([WindowID: [ParticipantID: InteractionMode]].self, forKey: .controlModes)
+        self.writeAccess = try c.decode([WindowID: Set<ParticipantID>].self, forKey: .writeAccess)
+        self.pauseStates = try c.decode([WindowID: PauseState].self, forKey: .pauseStates)
+        // Additive: an older peer's snapshot predates this key → default to empty, never throw.
+        self.shareInfo = try c.decodeIfPresent([WindowID: ShareInfo].self, forKey: .shareInfo) ?? [:]
+        self.revision = try c.decode(UInt64.self, forKey: .revision)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(shares, forKey: .shares)
+        try c.encode(controlModes, forKey: .controlModes)
+        try c.encode(writeAccess, forKey: .writeAccess)
+        try c.encode(pauseStates, forKey: .pauseStates)
+        try c.encode(shareInfo, forKey: .shareInfo)
+        try c.encode(revision, forKey: .revision)
     }
 
     // MARK: - Mutations (each bumps `revision` iff state actually changed)
@@ -66,13 +102,24 @@ public struct RoomModel: Codable, Sendable, Equatable {
         return true
     }
 
-    /// Remove a share and all state hanging off it (modes, write access, pause state).
+    /// Remove a share and all state hanging off it (modes, write access, pause state, share info).
     @discardableResult
     public mutating func removeShare(_ windowID: WindowID) -> Bool {
         guard shares.removeValue(forKey: windowID) != nil else { return false }
         controlModes[windowID] = nil
         writeAccess[windowID] = nil
         pauseStates[windowID] = nil
+        shareInfo[windowID] = nil
+        bump()
+        return true
+    }
+
+    /// Set (or update) the advisory `ShareInfo` for a shared window. Fails for unknown windows; no
+    /// bump when the info is unchanged (so a redundant re-broadcast doesn't churn the revision).
+    @discardableResult
+    public mutating func setShareInfo(_ info: ShareInfo, window: WindowID) -> Bool {
+        guard shares[window] != nil, shareInfo[window] != info else { return false }
+        shareInfo[window] = info
         bump()
         return true
     }
@@ -134,6 +181,7 @@ public struct RoomModel: Codable, Sendable, Equatable {
             controlModes[window] = nil
             writeAccess[window] = nil
             pauseStates[window] = nil
+            shareInfo[window] = nil
             changed = true
         }
 
@@ -152,6 +200,38 @@ public struct RoomModel: Codable, Sendable, Equatable {
         }
 
         if changed { bump() }
+        return changed
+    }
+
+    /// RECEIVE-SIDE cleanup when a participant is observed gone (transport disconnect diff / belt-
+    /// and-braces after `ownerDisconnected`). Structurally identical to `removeParticipant` but
+    /// **NEVER bumps `revision`** — a receiver bumping its mirrored revision would corrupt the
+    /// host's last-writer-wins ordering (the host is the sole revision authority; §2 wire rule
+    /// "RoomModel.revision must never be bumped receiver-locally"). Returns whether anything changed.
+    @discardableResult
+    public mutating func pruneParticipant(_ participant: ParticipantID) -> Bool {
+        var changed = false
+        for (window, owner) in shares where owner == participant {
+            shares[window] = nil
+            controlModes[window] = nil
+            writeAccess[window] = nil
+            pauseStates[window] = nil
+            shareInfo[window] = nil
+            changed = true
+        }
+        for window in Array(controlModes.keys) {
+            if controlModes[window]?.removeValue(forKey: participant) != nil {
+                if controlModes[window]?.isEmpty == true { controlModes[window] = nil }
+                changed = true
+            }
+        }
+        for window in Array(writeAccess.keys) {
+            if writeAccess[window]?.remove(participant) != nil {
+                if writeAccess[window]?.isEmpty == true { writeAccess[window] = nil }
+                changed = true
+            }
+        }
+        // Deliberately NO bump() — receiver-local revision changes break LWW.
         return changed
     }
 
@@ -174,6 +254,11 @@ public struct RoomModel: Codable, Sendable, Equatable {
     /// Pause state of a shared window; `nil` if the window isn't shared.
     public func pauseState(of window: WindowID) -> PauseState? {
         pauseStates[window]
+    }
+
+    /// Advisory descriptive metadata for a shared window; `nil` if none was broadcast (or unshared).
+    public func info(of window: WindowID) -> ShareInfo? {
+        shareInfo[window]
     }
 
     /// All windows currently shared by `participant`, in stable (UUID-sorted) order.
