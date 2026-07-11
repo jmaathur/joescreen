@@ -285,6 +285,20 @@ public actor LiveKitTransport: MediaTransport {
             identityToParticipant[localIdentity] = pid
             participantToIdentity[pid] = localIdentity
         }
+        #if os(iOS)
+        // iOS mic mute-mode fix. The SDK default (`.voiceProcessing`) toggles the voice-processing
+        // unit's `isVoiceProcessingInputMuted` flag — which on iOS gets STUCK muted across a
+        // mute→unmute cycle: the RTC track re-enables (so `isMicrophoneEnabled()` reports on, the UI
+        // shows unmuted) but the VPU keeps swallowing input, so peers hear silence. `.inputMixer`
+        // mutes/unmutes at the input-mixer level instead — no VPU flag, no audio-session churn — so
+        // unmute reliably restores capture. Set once per connection (before any mic toggle).
+        do {
+            try AudioManager.shared.set(microphoneMuteMode: .inputMixer)
+        } catch {
+            // Non-fatal: fall back to the SDK default (the buggy path), but log it so it's visible.
+            print("JoeScreen: failed to set iOS microphone mute mode: \(error)")
+        }
+        #endif
         updateState(.connected)
     }
 
