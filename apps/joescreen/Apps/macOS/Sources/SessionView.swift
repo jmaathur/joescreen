@@ -33,9 +33,9 @@ struct SessionView: View {
                 Button {
                     model.beginShare()
                 } label: {
-                    Label("Share Window", systemImage: "plus.rectangle.on.rectangle")
+                    Label("Share", systemImage: "plus.rectangle.on.rectangle")
                 }
-                .help("Share one of your windows with the room")
+                .help("Share a window or your whole screen with the room")
             }
         }
         // Admission refusal (M11): a visible alert when a share won't fit the uplink / encode budget.

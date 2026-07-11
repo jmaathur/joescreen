@@ -191,16 +191,22 @@ public struct RemoteWindowLifecycle: Sendable, Equatable {
             state = .gone
             return [.purge]
         case .subscribing:
-            if reconnecting && reason == .trackEnded {
+            // A bare trackEnded (crash, reconnect blip, OR a codec renegotiation republish, M11) parks
+            // in .stale so a same-window resubscribe can resume the SAME window (no flicker). An
+            // authoritative removal purges.
+            if reason == .trackEnded {
                 state = .stale
                 return []
             }
             state = .gone
             return [.purge]
         case .open, .hidden, .stale:
-            // A snapshot-removal or owner-disconnect is authoritative → purge even while reconnecting
-            // (the share is really gone). Only a bare trackEnded during reconnect gets the grace park.
-            if reconnecting && reason == .trackEnded && state != .stale {
+            // A snapshot-removal or owner-disconnect is AUTHORITATIVE → purge immediately (the share
+            // is really gone). A bare trackEnded — a crash, a reconnect blip, OR a codec-renegotiation
+            // unpublish/republish (M11) — parks in .stale (frozen frame + grace) so the resubscribe
+            // that follows a renegotiation swaps into the SAME window without a flicker; if no
+            // resubscribe arrives before the grace expires the app fires graceExpired → purge.
+            if reason == .trackEnded && state != .stale {
                 state = .stale
                 return [.pauseRendering]
             }

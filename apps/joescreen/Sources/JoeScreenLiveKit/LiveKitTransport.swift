@@ -316,11 +316,19 @@ public actor LiveKitTransport: MediaTransport {
         identityToParticipant[identity] ?? UUID(uuidString: identity)
     }
 
+    /// `MediaTransport` requirement — publishes a WINDOW share track. Delegates to the kind-aware
+    /// overload so window + display share both flow through one implementation.
     public func publishVideoTrack(for windowID: WindowID) async throws -> any VideoFrameSink {
+        try await publishVideoTrack(for: windowID, kind: .window)
+    }
+
+    /// Publish a share track of `kind` (window → `window:<uuid>`, display → `display:<uuid>`, M11).
+    /// The receiver's ShareTrackName parses either; the source stays `.screenShareVideo` for both.
+    public func publishVideoTrack(for windowID: WindowID, kind: ShareKind) async throws -> any VideoFrameSink {
         if let existing = publishedTracks[windowID] { return existing.sink }
 
-        // Track name encodes the window so receivers map track → window (§3).
-        let trackName = LiveKitTransport.trackName(for: windowID)
+        // Track name encodes the window/display so receivers map track → surface (§3, M11).
+        let trackName = ShareTrackName.encode(kind: kind, windowID: windowID)
         let track = LocalVideoTrack.createBufferTrack(
             name: trackName,
             source: .screenShareVideo,
@@ -501,8 +509,43 @@ public actor LiveKitTransport: MediaTransport {
     // MARK: - Codec context (D5)
 
     /// Update the share context so VideoPublishOptions reflect single-window VP9 vs multi-window H.264.
-    public func updateShareContext(windowCount: Int, wholeDisplay: Bool) {
+    /// Returns the number of already-published tracks whose STRUCTURAL codec no longer matches (and
+    /// were therefore renegotiated) — for logging/tests. Structural renegotiation (M11): a context
+    /// change that flips the codec (VP9 window live when a display share joins ⇒ all H.264)
+    /// unpublishes + republishes the SAME LocalVideoTrack/name/sink; the receiver sees
+    /// unsubscribe+resubscribe of the same name ⇒ swaps the track in the existing window (~1s freeze).
+    @discardableResult
+    public func updateShareContext(windowCount: Int, wholeDisplay: Bool) async -> Int {
         codecSelector = CodecSelector(windowCount: windowCount, wholeDisplay: wholeDisplay)
+        return await renegotiateForCodecChange()
+    }
+
+    /// Republish any live share track whose published codec no longer matches the current structural
+    /// codec. Same track/name/sink → the receiver's openOrReplace swaps it in place.
+    private func renegotiateForCodecChange() async -> Int {
+        let target = codecSelector.current
+        var renegotiated = 0
+        for (windowID, entry) in publishedTracks {
+            // Only tracks already published (have a codec + publication) and now mismatched.
+            guard let published = entry.publishedCodec, published != target,
+                  let oldPublication = entry.publication else { continue }
+            // Unpublish the old, republish the SAME LocalVideoTrack with fresh (codec-correct) options.
+            try? await room.localParticipant.unpublish(publication: oldPublication)
+            publishingWindowID = windowID
+            let options = makeVideoPublishOptions()
+            publishingWindowID = nil
+            do {
+                let newPublication = try await room.localParticipant.publish(videoTrack: entry.track, options: options)
+                publishedTracks[windowID]?.publication = newPublication
+                publishedTracks[windowID]?.publishedCodec = target
+                renegotiated += 1
+            } catch {
+                // Republish failed (disconnected mid-renegotiate). Leave the entry; a later attempt or
+                // teardown handles it. Surface as a state blip.
+                updateState(.failed(reason: "renegotiate failed: \(String(describing: error))"))
+            }
+        }
+        return renegotiated
     }
 
     /// Set the admitted target bitrate (bps) for a window's share track (M11). Applied via

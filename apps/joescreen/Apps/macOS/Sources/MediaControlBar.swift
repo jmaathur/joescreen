@@ -41,6 +41,25 @@ struct MediaControlBar: View {
                 onSelect: { model.selectVideoInput($0) },
                 onMenuOpen: { Task { await model.refreshVideoInputs() } })
 
+            // "Sharing Display" chip with a stop button (M11), shown only while sharing a screen.
+            if model.isSharingDisplay {
+                HStack(spacing: 6) {
+                    Image(systemName: "rectangle.on.rectangle.angled")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.red)
+                    Text("Sharing Display").font(.caption.weight(.medium))
+                    Button {
+                        model.stopDisplayShare()
+                    } label: {
+                        Image(systemName: "stop.circle.fill").foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop sharing your screen")
+                }
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Color.red.opacity(0.12), in: Capsule())
+            }
+
             Spacer()
 
             Button(role: .destructive) {

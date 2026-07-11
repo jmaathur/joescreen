@@ -19,13 +19,28 @@ final class RemoteWindowLifecycleTests: XCTestCase {
 
     // MARK: - Sharer crash / disconnect (frozen-ghost bug)
 
-    func testTrackEndedWhileConnectedPurgesImmediately() {
+    func testTrackEndedWhileConnectedParksStaleThenPurgesOnGrace() {
+        // A bare trackEnded (crash OR a codec-renegotiation republish, M11) parks .stale with a short
+        // grace so a same-window resubscribe can swap in without a flicker; grace expiry purges.
         var l = openLifecycle()
-        XCTAssertEqual(l.reduce(.trackGone(.trackEnded)), [.closeWindow, .purge])
+        XCTAssertEqual(l.reduce(.trackGone(.trackEnded)), [.pauseRendering])
+        XCTAssertEqual(l.state, .stale)
+        // A resubscribe within grace (renegotiation swap) resumes the SAME window.
+        var swapped = openLifecycle()
+        swapped.reduce(.trackGone(.trackEnded))
+        XCTAssertEqual(swapped.reduce(.trackSubscribed), [.resumeRendering])
+        XCTAssertEqual(swapped.state, .open)
+        // No resubscribe → grace expiry tears it down.
+        XCTAssertEqual(l.reduce(.graceExpired), [.closeWindow, .purge])
         XCTAssertEqual(l.state, .gone)
-        // Terminal: further events are inert.
         XCTAssertEqual(l.reduce(.trackSubscribed), [])
-        XCTAssertEqual(l.reduce(.userReopened), [])
+    }
+
+    func testAuthoritativeRemovalPurgesImmediatelyEvenConnected() {
+        // A snapshot removal / owner-disconnect is authoritative → no grace, immediate purge.
+        var l = openLifecycle()
+        XCTAssertEqual(l.reduce(.shareRemovedFromSnapshot), [.closeWindow, .purge])
+        XCTAssertEqual(l.state, .gone)
     }
 
     func testTrackEndedWhileReconnectingParksStaleThenPurgesOnGraceExpiry() {
@@ -139,10 +154,20 @@ final class RemoteWindowLifecycleTests: XCTestCase {
         XCTAssertEqual(l.state, .open)
     }
 
-    func testTrackGoneWhileHiddenPurges() {
+    func testTrackGoneWhileHiddenParksStaleThenPurges() {
         var l = openLifecycle()
         l.reduce(.occluded(true))
-        XCTAssertEqual(l.reduce(.trackGone(.trackEnded)), [.closeWindow, .purge])
+        // A bare trackEnded from hidden parks .stale (grace) like from open; grace expiry purges.
+        XCTAssertEqual(l.reduce(.trackGone(.trackEnded)), [.pauseRendering])
+        XCTAssertEqual(l.state, .stale)
+        XCTAssertEqual(l.reduce(.graceExpired), [.closeWindow, .purge])
+        XCTAssertEqual(l.state, .gone)
+    }
+
+    func testAuthoritativeRemovalWhileHiddenPurgesImmediately() {
+        var l = openLifecycle()
+        l.reduce(.occluded(true))
+        XCTAssertEqual(l.reduce(.ownerDisconnected), [.closeWindow, .purge])
         XCTAssertEqual(l.state, .gone)
     }
 
@@ -153,7 +178,9 @@ final class RemoteWindowLifecycleTests: XCTestCase {
         XCTAssertEqual(closed.reduce(.miniaturized(true)), [])
         XCTAssertEqual(closed.state, .closedByUser)
 
-        var gone = openLifecycle(); gone.reduce(.trackGone(.trackEnded))
+        // Reach .gone via an AUTHORITATIVE removal (a bare trackEnded now parks .stale first).
+        var gone = openLifecycle(); gone.reduce(.shareRemovedFromSnapshot)
+        XCTAssertEqual(gone.state, .gone)
         XCTAssertEqual(gone.reduce(.occluded(true)), [])
         XCTAssertEqual(gone.state, .gone)
     }
@@ -190,8 +217,8 @@ final class RemoteWindowLifecycleTests: XCTestCase {
             { self.openLifecycle() },                           // open
             { var l = self.openLifecycle(); l.reduce(.userClosed); return l },      // closedByUser
             { var l = self.openLifecycle(); l.reduce(.miniaturized(true)); return l }, // hidden
-            { var l = self.openLifecycle(); l.reduce(.transportReconnecting(true)); l.reduce(.trackGone(.trackEnded)); return l }, // stale
-            { var l = self.openLifecycle(); l.reduce(.trackGone(.trackEnded)); return l }, // gone
+            { var l = self.openLifecycle(); l.reduce(.trackGone(.trackEnded)); return l }, // stale (bare trackEnded)
+            { var l = self.openLifecycle(); l.reduce(.shareRemovedFromSnapshot); return l }, // gone (authoritative)
         ]
         let validStates: Set<String> = ["subscribing", "open", "closedByUser", "hidden", "stale", "gone"]
         for seed in seeds {

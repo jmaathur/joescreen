@@ -59,8 +59,12 @@ public final class AppModel {
     private var lifecycles: [WindowID: RemoteWindowLifecycle] = [:]
     /// Grace timers for windows parked in `.stale` during a reconnect (fire `graceExpired`).
     private var graceTimers: [WindowID: Task<Void, Never>] = [:]
-    /// The reconnect grace window before a stale (frozen-frame) viewer is torn down.
+    /// The reconnect grace window before a stale (frozen-frame) viewer is torn down (SFU link blip).
     private static let reconnectGraceSeconds: UInt64 = 10
+    /// The SHORT grace for a bare trackEnded while connected — long enough to catch a codec-
+    /// renegotiation resubscribe (~1s, M11) or confirm a real sharer crash, short enough that a real
+    /// crash tears the window down promptly (≤2s target).
+    private static let renegotiationGraceSeconds: UInt64 = 2
 
     // MARK: - Local media controls (mic + webcam)
 
@@ -84,8 +88,9 @@ public final class AppModel {
     /// unioned with current share owners. Kept separate so disconnects actually remove people.
     private var transportParticipants: Set<ParticipantID> = []
 
-    /// Windows this instance is locally sharing (capture services), keyed by windowID.
-    private var localCaptures: [WindowID: WindowCaptureService] = [:]
+    /// Surfaces this instance is locally sharing (window OR display capture services), keyed by
+    /// windowID. Typed as the `ShareCaptureService` existential so window + display share uniformly.
+    private var localCaptures: [WindowID: any ShareCaptureService] = [:]
     /// The kind (window/display) of each local share, so unshare updates the context correctly.
     private var localShareKinds: [WindowID: ShareKind] = [:]
     /// The structural share context this host publishes (D5). Updated to include a PENDING share
@@ -108,6 +113,7 @@ public final class AppModel {
 
     private let transport = LiveKitTransport()
     private let windowManager = RemoteWindowManager()
+    private let borderOverlay = ShareBorderOverlay()
     private var stateChannel: (any WireDataChannel)?
     private var cursorPump: CursorPump?
 
@@ -276,6 +282,8 @@ public final class AppModel {
         localShareBitrates.removeAll()
         shareContext = ShareContext()
         shareRefusedReason = nil
+        borderOverlay.hide()
+        isSharingDisplay = false
         await transport.disconnect()
         windowManager.closeAll()
         remoteWindows.removeAll()
@@ -595,15 +603,18 @@ public final class AppModel {
         cameraTrackSIDs[owner] = nil
     }
 
-    /// A remote sharer's track went away (stop/crash/disconnect). The reducer decides: park stale
-    /// during a reconnect, else close + purge.
+    /// A remote sharer's track went away (stop / crash / codec renegotiation republish). The reducer
+    /// parks it `.stale` (frozen frame); we arm a grace timer — a long one during an SFU-link
+    /// reconnect (blip), a short one otherwise (catch a renegotiation resubscribe / confirm a crash).
     private func handleRemoteTrackGone(windowID: WindowID) {
         guard lifecycles[windowID] != nil else { return }
         feed(windowID, .trackGone(.trackEnded))
-        // If the reducer parked it stale, show the badge + arm the grace timer.
         if lifecycles[windowID]?.state == .stale {
-            remoteWindows[windowID]?.isReconnecting = true
-            armGrace(windowID)
+            let reconnecting = (mediaState == .reconnecting)
+            // Show the "Reconnecting…" badge only for a real link reconnect; a renegotiation swap just
+            // freezes briefly (no alarming badge).
+            remoteWindows[windowID]?.isReconnecting = reconnecting
+            armGrace(windowID, seconds: reconnecting ? Self.reconnectGraceSeconds : Self.renegotiationGraceSeconds)
         }
     }
 
@@ -638,12 +649,12 @@ public final class AppModel {
         cancelGrace(windowID)
     }
 
-    // MARK: - Reconnect grace
+    // MARK: - Reconnect / renegotiation grace
 
-    private func armGrace(_ windowID: WindowID) {
+    private func armGrace(_ windowID: WindowID, seconds: UInt64) {
         cancelGrace(windowID)
         graceTimers[windowID] = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.reconnectGraceSeconds * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
             guard !Task.isCancelled else { return }
             self?.feed(windowID, .graceExpired)
         }
@@ -949,11 +960,75 @@ public final class AppModel {
     /// Dismiss the admission-refusal alert.
     public func dismissShareRefusal() { shareRefusedReason = nil }
 
-    /// Start sharing a whole display. The DisplayCaptureService + naming + renegotiation land in
-    /// M11.4/M11.5; this is the entry point the picker/automation resolve to.
+    /// Start sharing a whole display (M11). One display share per sharer in v1 (window+display mix
+    /// allowed; a SECOND display is refused with a visible reason — DECISIONS §5.3). The
+    /// DisplayCaptureService captures with the hall-of-mirrors filter; naming uses display:<uuid>.
     private func startSharingDisplay(displayID: CGDirectDisplayID) async {
-        // Implemented in M11.5 (DisplayCaptureService wiring + one-display-per-sharer + renegotiation).
-        AppLog.info("startSharingDisplay displayID=\(displayID) — full path lands in M11.5")
+        guard let me = localParticipantID else { return }
+        // One-display-per-sharer: refuse a second display (window+display is fine).
+        if shareContext.displayShareCount >= 1 {
+            shareRefusedReason = "You can share only one screen at a time. Stop the current screen share first."
+            return
+        }
+        let hasAccess = CGPreflightScreenCaptureAccess()
+        AppLog.info("startSharingDisplay displayID=\(displayID) screenCaptureAccess=\(hasAccess)")
+        if !hasAccess { _ = CGRequestScreenCaptureAccess() }
+
+        let windowID = WindowID()
+        let capture = DisplayCaptureService(windowID: windowID, displayID: displayID)
+        localCaptures[windowID] = capture
+        localShareKinds[windowID] = .display
+
+        // Codec-ordering fix + structural D5: a display share forces H.264 for ALL share tracks.
+        // Update the context to INCLUDE the pending display BEFORE publish; the transport
+        // renegotiates any live VP9 window track to H.264 as part of updateShareContext.
+        let pending = shareContext.adding(.display)
+        await pushShareContext(pending)
+
+        do {
+            let sink = try await transport.publishVideoTrack(for: windowID, kind: .display)
+            let events = await capture.events()
+            pumps.append(Task { @MainActor [weak self] in
+                for await event in events {
+                    switch event {
+                    case .paused: self?.setLocalPause(windowID, .paused)
+                    case .resumed: self?.setLocalPause(windowID, .live)
+                    case .ended: self?.unshare(windowID)
+                    case .stopped: self?.unshare(windowID)
+                    case .resized(let w, let h): self?.updateShareDimensions(windowID, pixelWidth: w, pixelHeight: h)
+                    case .frame: break
+                    }
+                }
+            })
+            try await capture.start(sink: sink)
+            let info = await capture.shareInfo
+
+            if !(await admitShare(windowID: windowID, kind: .display, info: info)) {
+                await teardownFailedShare(windowID)
+                return
+            }
+
+            shareContext = pending
+            room.addShare(windowID, owner: me)
+            if let info { room.setShareInfo(info, window: windowID) }
+            // Show the sharer's screen-border affordance.
+            borderOverlay.show(displayID: displayID)
+            isSharingDisplay = true
+            broadcastState()
+            broadcastShareEvent(.shared, windowID: windowID, owner: me, info: room.info(of: windowID))
+        } catch {
+            AppLog.error("startSharingDisplay failed: \(String(describing: error))")
+            await teardownFailedShare(windowID)
+        }
+    }
+
+    /// Whether this instance is currently sharing a display (drives the "Sharing Display" chip).
+    public private(set) var isSharingDisplay = false
+
+    /// Stop the current display share (control-bar chip / stop button).
+    public func stopDisplayShare() {
+        guard let id = localShareKinds.first(where: { $0.value == .display })?.key else { return }
+        unshare(id)
     }
 
     /// Push a share context to the transport (windowCount + wholeDisplay) — the transport's
@@ -976,9 +1051,15 @@ public final class AppModel {
         localShareBitrates[windowID] = nil
         await transport.unpublishVideoTrack(for: windowID)
         room.removeShare(windowID)
-        // Update the structural context (removing this share) so any remaining tracks reflect it.
+        // Update the structural context (removing this share) so any remaining tracks reflect it (a
+        // window track may renegotiate VP9↔H.264 as the display share leaves).
         shareContext = shareContext.removing(kind)
         await pushShareContext(shareContext)
+        // Display-share teardown: hide the sharer border + clear the chip.
+        if kind == .display {
+            borderOverlay.hide()
+            isSharingDisplay = shareContext.displayShareCount > 0
+        }
         broadcastState()
         broadcastShareEvent(.unshared, windowID: windowID, owner: me)
     }
