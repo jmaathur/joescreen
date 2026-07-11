@@ -22,6 +22,8 @@ xcuserdata/
 # drift. The entitlements files ARE hand-written and committed. (Match at any depth.)
 **/Resources/Info-macOS.plist
 **/Resources/Info-iOS.plist
+# The broadcast-upload extension's Info.plist is likewise generated from project.yml's `info:` block.
+**/BroadcastExtension/Info-Broadcast.plist
 .swiftpm/xcode/package.xcworkspace/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/

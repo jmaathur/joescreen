@@ -42,7 +42,7 @@ struct ViewerJoinSheet: View {
                     }
                 }
                 Section {
-                    Text("Share your voice and camera. iOS can't control other Macs' windows (it's a viewer for those).")
+                    Text("Share your voice, camera, and whole screen. iOS can't control other Macs' windows (it's a viewer for those).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Shared App Group so the extension and the app exchange ReplayKit frames over a unix socket
+	     in the group container (LiveKit's BroadcastBundleInfo resolves the socket path from this). -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.joescreen.app.ios</string>
+	</array>
+</dict>
+</plist>

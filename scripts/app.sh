@@ -14,6 +14,7 @@ JOIN_URL="${JOIN_URL:-ws://localhost:7880}"
 # project.yml references ${SHIP_IOS_ENTITLEMENTS} / ${SHIP_MAC_ENTITLEMENTS}; default both so xcodegen
 # doesn't emit an empty path. Dev uses the empty macOS entitlements (ad-hoc, no AMFI Killed-9).
 export SHIP_IOS_ENTITLEMENTS="${SHIP_IOS_ENTITLEMENTS:-iOS/Resources/JoeScreen-iOS-minimal.entitlements}"
+export SHIP_IOS_EXT_ENTITLEMENTS="${SHIP_IOS_EXT_ENTITLEMENTS:-BroadcastExtension/BroadcastExtension-minimal.entitlements}"
 export SHIP_MAC_ENTITLEMENTS="${SHIP_MAC_ENTITLEMENTS:-macOS/Resources/JoeScreen-macOS-empty.entitlements}"
 
 echo "▶ regenerating Xcode project"

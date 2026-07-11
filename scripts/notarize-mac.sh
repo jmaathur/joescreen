@@ -39,6 +39,7 @@ echo "✓ signing identity: $DEVID"
 # not by an entitlement — so dropping SharePlay costs nothing for the core feature. Non-sandboxed is
 # the point of Developer-ID over App Store (D6).
 export SHIP_IOS_ENTITLEMENTS="iOS/Resources/JoeScreen-iOS-minimal.entitlements"
+export SHIP_IOS_EXT_ENTITLEMENTS="BroadcastExtension/BroadcastExtension-minimal.entitlements"
 export SHIP_MAC_ENTITLEMENTS="macOS/Resources/JoeScreen-macOS-appstore.entitlements"
 
 echo "── regenerating Xcode project (TEAM_ID=$APPLE_TEAM_ID)"

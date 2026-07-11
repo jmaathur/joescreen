@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MINIMAL broadcast-extension entitlements for the FIRST TestFlight build (before the App Group is
+  registered with Apple). Empty dict so automatic signing succeeds — matching JoeScreen-iOS-minimal.
+  The broadcast IPC needs the App Group, so whole-screen sharing only works once you build with
+  SHIP_ENTITLEMENTS=full (BroadcastExtension.entitlements) AND the App Group is registered.
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

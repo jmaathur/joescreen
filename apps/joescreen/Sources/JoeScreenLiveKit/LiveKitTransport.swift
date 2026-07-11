@@ -48,6 +48,13 @@ public actor LiveKitTransport: MediaTransport {
     /// publication only to unpublish and to reach the local track for self-preview.
     private var cameraPublication: LocalTrackPublication?
 
+    #if os(iOS)
+    /// The local whole-screen broadcast publication (iOS Phase 2). Nil when not broadcasting. Fed by
+    /// the ReplayKit broadcast extension over the App Group socket; published under a `display:<uuid>`
+    /// name so viewers render it exactly like a macOS display share. Kept only to unpublish.
+    private var broadcastPublication: LocalTrackPublication?
+    #endif
+
     /// Identity binding: transport identity string ↔ ParticipantID (§3 input-authorization needs it).
     private var identityToParticipant: [String: ParticipantID] = [:]
     private var participantToIdentity: [ParticipantID: String] = [:]
@@ -505,6 +512,36 @@ public actor LiveKitTransport: MediaTransport {
         }
         return count
     }
+
+    // MARK: - iOS whole-screen broadcast (iOS Phase 2)
+
+    #if os(iOS)
+    /// Publish the iOS ReplayKit broadcast (whole screen) as a `display:<windowID>` share, so viewers
+    /// parse + render it exactly like a macOS display share (ShareTrackName). We name the track
+    /// ourselves — the SDK's auto-publish path (BroadcastManager.shouldPublishTrack) would name it the
+    /// generic `screen_share`, which our receivers don't recognize (they only accept window:/display:).
+    ///
+    /// Called AFTER the broadcast is actually running (BroadcastManager.isBroadcasting == true), so the
+    /// BroadcastScreenCapturer already has the extension's socket to read frames from.
+    public func publishBroadcastScreenShare(windowID: WindowID) async throws {
+        guard broadcastPublication == nil else { return } // idempotent
+        let trackName = ShareTrackName.encode(kind: .display, windowID: windowID)
+        // The capturer reads ReplayKit sample buffers from the shared App Group socket; useBroadcast-
+        // Extension makes it the socket-backed capturer rather than an in-app one.
+        let options = ScreenShareCaptureOptions(useBroadcastExtension: true)
+        let track = LocalVideoTrack.createBroadcastScreenCapturerTrack(
+            name: trackName, source: .screenShareVideo, options: options)
+        broadcastPublication = try await room.localParticipant.publish(
+            videoTrack: track, options: makeVideoPublishOptions())
+    }
+
+    /// Unpublish the iOS whole-screen broadcast share (when the user stops the broadcast).
+    public func unpublishBroadcastScreenShare() async {
+        guard let publication = broadcastPublication else { return }
+        broadcastPublication = nil
+        try? await room.localParticipant.unpublish(publication: publication)
+    }
+    #endif
 
     // MARK: - Codec context (D5)
 

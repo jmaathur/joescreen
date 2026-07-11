@@ -19,6 +19,12 @@ options:
 packages:
   JoeScreen:
     path: ..
+  # LiveKit SDK, declared directly so the iOS broadcast-upload extension can link the `LiveKit`
+  # product for `LKSampleHandler` (the app links LiveKit transitively via JoeScreenLiveKit). Version
+  # MUST match Package.swift's pin (client-sdk-swift 2.15.1) so both link the same LiveKit.
+  LiveKit:
+    url: https://github.com/livekit/client-sdk-swift.git
+    exactVersion: "2.15.1"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # Signing (M1 Killed-9 landmine).
@@ -71,7 +77,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app
         PRODUCT_NAME: JoeScreen
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "10"
+        CURRENT_PROJECT_VERSION: "11"
         # App icon from the asset catalog → emits CFBundleIconName (App Store validation requires it).
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Entitlements file, overridable by the ship scripts via ${SHIP_MAC_ENTITLEMENTS}. Defaults to
@@ -87,7 +93,7 @@ targets:
         CFBundleName: JoeScreen
         CFBundleDisplayName: JoeScreen
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "10"
+        CFBundleVersion: "11"
         LSMinimumSystemVersion: "14.0"
         # App icon set name (App Store validation requires the key explicitly, like iOS).
         CFBundleIconName: AppIcon
@@ -132,12 +138,14 @@ targets:
         product: JoeScreenLiveKit
       - package: JoeScreen
         product: JoeScreenUI
+      # Embed the broadcast-upload extension so ReplayKit whole-screen sharing (iOS Phase 2) works.
+      - target: JoeScreen-iOS-broadcast
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app.ios
         PRODUCT_NAME: JoeScreen
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "10"
+        CURRENT_PROJECT_VERSION: "11"
         TARGETED_DEVICE_FAMILY: "1,2"   # iPhone + iPad
         # App icon from the asset catalog → emits CFBundleIconName (App Store validation requires it).
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -158,7 +166,7 @@ targets:
         CFBundleName: JoeScreen
         CFBundleDisplayName: JoeScreen
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "10"
+        CFBundleVersion: "11"
         # App Store category + export-compliance (same rationale as macOS above).
         LSApplicationCategoryType: "public.app-category.productivity"
         ITSAppUsesNonExemptEncryption: false
@@ -184,7 +192,56 @@ targets:
         # APIs, so Apple's static analysis (ITMS-90683) mandates a purpose string or it rejects the build.
         NSCameraUsageDescription: "JoeScreen may use your camera for optional video during a shared session."
         NSSupportsGroupActivities: true
+        # iOS whole-screen sharing (iOS Phase 2). LiveKit's BroadcastBundleInfo reads these to locate
+        # the shared App Group container (where the ReplayKit→app unix socket lives) and the broadcast
+        # extension bundle id it should activate. Without them it falls back to derived defaults that
+        # don't match our bundle ids. The App Group is granted by the entitlements file (full mode).
+        RTCAppGroupIdentifier: group.com.joescreen.app.ios
+        RTCScreenSharingExtension: com.joescreen.app.ios.broadcast
         CFBundleURLTypes:
           - CFBundleURLName: com.joescreen.app.join
             CFBundleURLSchemes:
               - joescreen
+
+  # ── iOS Broadcast Upload Extension: whole-screen sharing (iOS Phase 2). ──
+  # A ReplayKit broadcast extension. LiveKit's LKSampleHandler pipes screen sample buffers over a
+  # unix socket in the shared App Group container to the app, which publishes them (BroadcastManager).
+  # iOS can only share the WHOLE screen this way (R6). Runs under a tight (~50 MB, R7) jetsam budget,
+  # so it links ONLY LiveKit and nothing else heavy.
+  JoeScreen-iOS-broadcast:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: BroadcastExtension/Sources
+    dependencies:
+      # Links LiveKit directly for LKSampleHandler (the app gets LiveKit via JoeScreenLiveKit instead).
+      - package: LiveKit
+        product: LiveKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app.ios.broadcast
+        PRODUCT_NAME: JoeScreenBroadcast
+        # Swift 5 like JoeScreenLiveKit — LiveKit's 2.15.1 API isn't Swift-6 strict-concurrency clean.
+        SWIFT_VERSION: "5.0"
+        # Same variable-selected entitlements pattern as the app: minimal (empty → auto-signing works
+        # before the App Group is registered) vs full (App Group → broadcast IPC works). build-ipa.sh
+        # exports SHIP_IOS_EXT_ENTITLEMENTS alongside SHIP_IOS_ENTITLEMENTS; app.sh/dev.sh default it.
+        CODE_SIGN_ENTITLEMENTS: ${SHIP_IOS_EXT_ENTITLEMENTS}
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "YES"
+    info:
+      path: BroadcastExtension/Info-Broadcast.plist
+      properties:
+        CFBundleName: JoeScreenBroadcast
+        CFBundleDisplayName: JoeScreen Screen Share
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "11"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          # Module-qualified principal class: <product-module>.<class>. PRODUCT_NAME sets the module.
+          NSExtensionPrincipalClass: JoeScreenBroadcast.SampleHandler
+          NSExtensionAttributes:
+            # Whole-screen (not per-app) broadcast — iOS's only mode outside an app-embedded picker.
+            RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer

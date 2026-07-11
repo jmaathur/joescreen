@@ -1,6 +1,7 @@
 import SwiftUI
 import Observation
 import AVFoundation
+import Combine
 import JoeScreenKit
 import JoeScreenLiveKit
 import LiveKit
@@ -36,6 +37,10 @@ public final class ViewerModel {
     public private(set) var cameraEnabled = false
     /// The local camera track for the self-preview (non-nil exactly while the camera is on).
     public private(set) var localCameraTrack: VideoTrack?
+    /// Whether the local whole-screen broadcast is currently LIVE. Drives the "Share Screen" toggle.
+    /// iOS can only share the WHOLE screen (R6), via a ReplayKit broadcast extension; the desktop's
+    /// window/display picker becomes this single toggle.
+    public private(set) var screenShareEnabled = false
     /// Whether to join the next call muted (persisted; default false). Mirrors the desktop pref.
     public var joinMuted: Bool {
         get { UserDefaults.standard.bool(forKey: "JoeScreen.joinMuted") }
@@ -46,7 +51,22 @@ public final class ViewerModel {
     private var stateChannel: (any WireDataChannel)?
     private var pumps: [Task<Void, Never>] = []
 
-    public init() {}
+    /// Observes LiveKit's broadcast state (ReplayKit start/stop) to publish/unpublish the screen share.
+    private var broadcastCancellable: AnyCancellable?
+    /// The stable WindowID for our whole-screen broadcast share (minted once per broadcast).
+    private var broadcastWindowID: WindowID?
+
+    public init() {
+        // The SDK auto-publishes a broadcast track named `screen_share` when broadcasting starts; we
+        // publish it OURSELVES with a `display:<uuid>` name (so viewers recognize it), so disable the
+        // auto-path. Then mirror the real ReplayKit broadcast state into `screenShareEnabled`.
+        BroadcastManager.shared.shouldPublishTrack = false
+        broadcastCancellable = BroadcastManager.shared.isBroadcastingPublisher
+            .receive(on: RunLoop.main)
+            .sink { [weak self] isBroadcasting in
+                Task { @MainActor in await self?.broadcastStateChanged(isBroadcasting) }
+            }
+    }
 
     // MARK: - Join
 
@@ -115,6 +135,11 @@ public final class ViewerModel {
         cameraEnabled = false
         localCameraTrack = nil
         usingFrontCamera = true
+        // Stop any active whole-screen broadcast on leave (the SDK unpublishes when it ends too).
+        if BroadcastManager.shared.isBroadcasting { BroadcastManager.shared.requestStop() }
+        await transport.unpublishBroadcastScreenShare()
+        broadcastWindowID = nil
+        screenShareEnabled = false
         phase = .idle
         showJoinSheet = true
     }
@@ -176,6 +201,39 @@ public final class ViewerModel {
         case .authorized: return true
         case .notDetermined: return await AVCaptureDevice.requestAccess(for: .video)
         default: return false
+        }
+    }
+
+    // MARK: - Screen share (whole-screen broadcast; iOS's analog of the desktop window/display picker)
+
+    /// Toggle the whole-screen broadcast. Starting shows the system broadcast picker (the user must
+    /// tap "Start Broadcast"); stopping ends it. The actual publish/unpublish happens in
+    /// `broadcastStateChanged`, driven by the REAL ReplayKit state — tapping here is only a request.
+    public func toggleScreenShare() {
+        if BroadcastManager.shared.isBroadcasting {
+            BroadcastManager.shared.requestStop()
+        } else {
+            BroadcastManager.shared.requestActivation()
+        }
+    }
+
+    /// React to the real ReplayKit broadcast state: publish our `display:<uuid>` share when it starts,
+    /// unpublish when it stops. `screenShareEnabled` follows the true state (not the tap), so a user
+    /// who cancels the system picker never shows as "sharing".
+    private func broadcastStateChanged(_ isBroadcasting: Bool) async {
+        if isBroadcasting {
+            let windowID = broadcastWindowID ?? WindowID()
+            broadcastWindowID = windowID
+            do {
+                try await transport.publishBroadcastScreenShare(windowID: windowID)
+                screenShareEnabled = true
+            } catch {
+                screenShareEnabled = false
+            }
+        } else {
+            await transport.unpublishBroadcastScreenShare()
+            broadcastWindowID = nil
+            screenShareEnabled = false
         }
     }
 

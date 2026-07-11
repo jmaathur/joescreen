@@ -88,7 +88,9 @@ struct InCallView: View {
     }
 }
 
-/// The bottom control bar: mic + camera toggles (+ flip camera), mirroring the desktop control bar.
+/// The bottom control bar: mic + camera toggles (+ flip camera) + whole-screen share, mirroring the
+/// desktop control bar. On iOS "share a window" isn't possible (whole-screen only, R6), so the
+/// desktop's window/display picker becomes a single "Share Screen" toggle here.
 struct iOSMediaControlBar: View {
     @Environment(ViewerModel.self) private var model
 
@@ -103,17 +105,31 @@ struct iOSMediaControlBar: View {
                     model.flipCamera()
                 }
             }
+            // Whole-screen share. On = actively broadcasting (tint it to read as "live"); off shows the
+            // neutral share glyph. Tapping surfaces the system broadcast picker / stops the broadcast.
+            controlButton(on: model.screenShareEnabled,
+                          onSymbol: "rectangle.inset.filled.on.rectangle",
+                          offSymbol: "rectangle.on.rectangle",
+                          activeColor: .green) { model.toggleScreenShare() }
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
         .background(.ultraThinMaterial, in: Capsule())
         .padding(.bottom, 8)
     }
 
-    private func controlButton(on: Bool, onSymbol: String, offSymbol: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    /// One control-bar toggle. Default semantics (mic/camera): "on" is neutral (primary), "off" is red
+    /// (muted = a warning). Pass `activeColor` to invert that for a positive-when-on control (screen
+    /// share): "on" tints `activeColor` (live), "off" is neutral primary.
+    private func controlButton(on: Bool, onSymbol: String, offSymbol: String,
+                               activeColor: Color? = nil, _ action: @escaping () -> Void) -> some View {
+        let tint: Color = {
+            if let activeColor { return on ? activeColor : .primary }
+            return on ? .primary : .red
+        }()
+        return Button(action: action) {
             Image(systemName: on ? onSymbol : offSymbol)
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(on ? Color.primary : Color.red)
+                .foregroundStyle(tint)
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
