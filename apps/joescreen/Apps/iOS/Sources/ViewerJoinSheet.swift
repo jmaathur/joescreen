@@ -42,7 +42,7 @@ struct ViewerJoinSheet: View {
                     }
                 }
                 Section {
-                    Text("iOS is a viewer + voice client. It cannot control or share windows.")
+                    Text("Share your voice and camera. iOS can't control other Macs' windows (it's a viewer for those).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

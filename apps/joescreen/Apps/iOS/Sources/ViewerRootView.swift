@@ -34,7 +34,7 @@ struct ViewerRootView: View {
                 Text("Connecting…").foregroundStyle(.secondary)
             }
         case .inCall:
-            SharesTabView()
+            InCallView()
         case .failed(let message):
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -61,6 +61,75 @@ struct ViewerWelcome: View {
             Button("Join a Session…") { model.showJoinSheet = true }
                 .buttonStyle(.borderedProminent).controlSize(.large)
         }.padding()
+    }
+}
+
+/// The in-call layout: the remote shares fill the screen, a mirrored camera self-preview floats in a
+/// corner (only while the camera is on), and a control bar at the bottom toggles mic + camera.
+struct InCallView: View {
+    @Environment(ViewerModel.self) private var model
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            SharesTabView()
+            // Self-preview PiP (mirrored) while the camera is on.
+            if let track = model.localCameraTrack {
+                VStack {
+                    HStack {
+                        Spacer()
+                        SelfPreviewPiP(track: track)
+                            .padding(.top, 8).padding(.trailing, 12)
+                    }
+                    Spacer()
+                }
+            }
+            iOSMediaControlBar()
+        }
+    }
+}
+
+/// The bottom control bar: mic + camera toggles (+ flip camera), mirroring the desktop control bar.
+struct iOSMediaControlBar: View {
+    @Environment(ViewerModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 22) {
+            controlButton(on: model.micEnabled,
+                          onSymbol: "mic.fill", offSymbol: "mic.slash.fill") { model.toggleMic() }
+            controlButton(on: model.cameraEnabled,
+                          onSymbol: "video.fill", offSymbol: "video.slash.fill") { model.toggleCamera() }
+            if model.cameraEnabled {
+                controlButton(on: true, onSymbol: "arrow.triangle.2.circlepath.camera", offSymbol: "arrow.triangle.2.circlepath.camera") {
+                    model.flipCamera()
+                }
+            }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.bottom, 8)
+    }
+
+    private func controlButton(on: Bool, onSymbol: String, offSymbol: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: on ? onSymbol : offSymbol)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(on ? Color.primary : Color.red)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The mirrored camera self-preview picture-in-picture.
+struct SelfPreviewPiP: View {
+    let track: VideoTrack
+    var body: some View {
+        SwiftUIVideoView(track, layoutMode: .fill, mirrorMode: .mirror)
+            .frame(width: 96, height: 128)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.6), lineWidth: 2))
+            .shadow(radius: 4)
     }
 }
 

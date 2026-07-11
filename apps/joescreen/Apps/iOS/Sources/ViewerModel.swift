@@ -1,10 +1,14 @@
 import SwiftUI
 import Observation
+import AVFoundation
 import JoeScreenKit
 import JoeScreenLiveKit
+import LiveKit
 
-/// The iOS viewer's app state (M8). Connects to a session via Direct Session Mode and renders every
-/// remote shared window as a zoomable video pane. Viewer + voice only — no capture, no input (R6).
+/// The iOS viewer's app state (M8, extended). Connects to a session via Direct Session Mode, renders
+/// every remote shared window, and lets the user publish their **mic** and **camera** (toggleable,
+/// mirroring the desktop). iOS still cannot be remote-CONTROLLED and shares its screen full-screen
+/// only (R6) — the camera here is a normal `.camera` video bubble like the Mac's.
 @MainActor
 @Observable
 public final class ViewerModel {
@@ -23,6 +27,20 @@ public final class ViewerModel {
     public private(set) var remoteTracks: [WindowID: RemoteVideoTrackRef] = [:]
     /// Owner per window (for chrome color), from the mirrored room state.
     public private(set) var owners: [WindowID: ParticipantID] = [:]
+
+    // MARK: - Local media (mic + camera)
+
+    /// Whether the local mic is currently LIVE (published + unmuted). Drives the mic toggle.
+    public private(set) var micEnabled = false
+    /// Whether the local camera is currently LIVE. Drives the camera toggle.
+    public private(set) var cameraEnabled = false
+    /// The local camera track for the self-preview (non-nil exactly while the camera is on).
+    public private(set) var localCameraTrack: VideoTrack?
+    /// Whether to join the next call muted (persisted; default false). Mirrors the desktop pref.
+    public var joinMuted: Bool {
+        get { UserDefaults.standard.bool(forKey: "JoeScreen.joinMuted") }
+        set { UserDefaults.standard.set(newValue, forKey: "JoeScreen.joinMuted") }
+    }
 
     private let transport = LiveKitTransport()
     private var stateChannel: (any WireDataChannel)?
@@ -73,8 +91,9 @@ public final class ViewerModel {
             let state = try await transport.openDataChannel(.state)
             stateChannel = state
             startStatePump(state)
-            // Voice: enable the mic on join (iOS is a first-class voice participant).
-            try? await transport.setMicrophone(enabled: true)
+            // Voice: enable the mic on join unless the user chose to join muted.
+            try? await transport.setMicrophone(enabled: !joinMuted)
+            micEnabled = await transport.isMicrophoneEnabled()
             phase = .inCall
             if let me = localParticipantID { participants.insert(me) }
         } catch {
@@ -92,8 +111,72 @@ public final class ViewerModel {
         participants = []
         localParticipantID = nil
         mediaState = .disconnected
+        micEnabled = false
+        cameraEnabled = false
+        localCameraTrack = nil
+        usingFrontCamera = true
         phase = .idle
         showJoinSheet = true
+    }
+
+    // MARK: - Mic + camera toggles (mirrors the desktop control bar)
+
+    /// Which camera to capture from (front by default, like a selfie). Flip toggles it.
+    private var usingFrontCamera = true
+
+    /// Toggle the mic. LiveKit mutes rather than unpublishes, so read the live state back.
+    public func toggleMic() {
+        let target = !micEnabled
+        micEnabled = target // optimistic
+        Task {
+            try? await transport.setMicrophone(enabled: target)
+            micEnabled = await transport.isMicrophoneEnabled()
+        }
+    }
+
+    /// Toggle the camera. Enabling preflights camera TCC (deterministic system prompt) and publishes
+    /// a `.camera` track; the local track drives the self-preview.
+    public func toggleCamera() {
+        let target = !cameraEnabled
+        Task {
+            if target {
+                guard await Self.ensureCameraAccess() else { return } // denied → stay off
+            }
+            do {
+                try await transport.setCamera(enabled: target, deviceID: cameraDeviceID())
+            } catch {
+                return
+            }
+            cameraEnabled = await transport.isCameraPublished()
+            localCameraTrack = cameraEnabled ? await transport.localCameraVideoTrack() : nil
+        }
+    }
+
+    /// Flip between the front and back camera (only meaningful while the camera is on).
+    public func flipCamera() {
+        guard cameraEnabled else { usingFrontCamera.toggle(); return }
+        usingFrontCamera.toggle()
+        Task {
+            try? await transport.setCamera(enabled: true, deviceID: cameraDeviceID())
+            localCameraTrack = await transport.localCameraVideoTrack()
+        }
+    }
+
+    /// The AVCaptureDevice uniqueID for the currently-selected (front/back) camera, or nil for default.
+    private func cameraDeviceID() -> String? {
+        let position: AVCaptureDevice.Position = usingFrontCamera ? .front : .back
+        return AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera], mediaType: .video, position: position)
+            .devices.first?.uniqueID
+    }
+
+    /// Preflight camera TCC so the system prompt fires deterministically. Returns whether authorized.
+    private static func ensureCameraAccess() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: return true
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .video)
+        default: return false
+        }
     }
 
     // MARK: - Pumps
