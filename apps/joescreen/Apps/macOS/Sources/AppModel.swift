@@ -509,12 +509,18 @@ public final class AppModel {
         }
     }
 
-    /// Owner approves a pending control request → record the driver (display badge). The actual
-    /// injection grant (enabling remoteControl + a .write capability) lands with the consent-UI wiring;
-    /// this drives the "X is driving" badge and the request flow now.
+    /// Owner approves a pending control request → record the driver (display badge) and broadcast the
+    /// DISPLAY-ONLY controller mirror so everyone sees "being driven by X" (F5/F10). The actual
+    /// injection grant (enabling remoteControl + a .write capability) lands with the consent-UI
+    /// wiring; authorization NEVER reads the mirror (D12).
     public func approveControlRequest() {
         guard let req = pendingControlRequest else { return }
         activeDriver = req.participantID
+        // Broadcast the display-only controller for the requested window (owner-side mirror).
+        if room.owner(of: req.windowID) == localParticipantID,
+           room.setController(req.participantID, window: req.windowID) {
+            broadcastState()
+        }
         pendingControlRequest = nil
     }
 

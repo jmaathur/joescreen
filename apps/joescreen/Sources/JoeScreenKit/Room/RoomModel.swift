@@ -46,6 +46,13 @@ public struct RoomModel: Codable, Sendable, Equatable {
     /// Cascade-cleared alongside a window's other state on share/participant removal.
     public private(set) var shareInfo: [WindowID: ShareInfo]
 
+    /// DISPLAY-ONLY mirror of who is currently driving each window (F5/F10, backlog #6). The OWNER
+    /// broadcasts it from its authoritative `ActiveControllerLock` so receivers can show a "being
+    /// driven by X" badge. **Authorization NEVER reads this** — the owner's `InputAuthorizer` +
+    /// `OwnerState.locksByWindow` are the injection-time source of truth (D12); a lie here is UI-only.
+    /// Additive (`decodeIfPresent`); cascade-cleared on share/participant removal.
+    public private(set) var controllerByWindow: [WindowID: ParticipantID]
+
     /// Monotonic snapshot revision. Starts at 0 for an empty room; strictly increases with every
     /// effective mutation. Wrapping addition is used defensively but a UInt64 never wraps in
     /// practice.
@@ -57,6 +64,7 @@ public struct RoomModel: Codable, Sendable, Equatable {
         self.writeAccess = [:]
         self.pauseStates = [:]
         self.shareInfo = [:]
+        self.controllerByWindow = [:]
         self.revision = 0
     }
 
@@ -65,7 +73,7 @@ public struct RoomModel: Codable, Sendable, Equatable {
     // Key names are IDENTICAL to the pre-`shareInfo` synthesized names, so old snapshots round-trip
     // byte-for-byte and the new field is purely additive (decodeIfPresent → [:] for old peers).
     enum CodingKeys: String, CodingKey {
-        case shares, controlModes, writeAccess, pauseStates, shareInfo, revision
+        case shares, controlModes, writeAccess, pauseStates, shareInfo, controllerByWindow, revision
     }
 
     public init(from decoder: any Decoder) throws {
@@ -74,8 +82,9 @@ public struct RoomModel: Codable, Sendable, Equatable {
         self.controlModes = try c.decode([WindowID: [ParticipantID: InteractionMode]].self, forKey: .controlModes)
         self.writeAccess = try c.decode([WindowID: Set<ParticipantID>].self, forKey: .writeAccess)
         self.pauseStates = try c.decode([WindowID: PauseState].self, forKey: .pauseStates)
-        // Additive: an older peer's snapshot predates this key → default to empty, never throw.
+        // Additive: an older peer's snapshot predates these keys → default to empty, never throw.
         self.shareInfo = try c.decodeIfPresent([WindowID: ShareInfo].self, forKey: .shareInfo) ?? [:]
+        self.controllerByWindow = try c.decodeIfPresent([WindowID: ParticipantID].self, forKey: .controllerByWindow) ?? [:]
         self.revision = try c.decode(UInt64.self, forKey: .revision)
     }
 
@@ -86,6 +95,7 @@ public struct RoomModel: Codable, Sendable, Equatable {
         try c.encode(writeAccess, forKey: .writeAccess)
         try c.encode(pauseStates, forKey: .pauseStates)
         try c.encode(shareInfo, forKey: .shareInfo)
+        try c.encode(controllerByWindow, forKey: .controllerByWindow)
         try c.encode(revision, forKey: .revision)
     }
 
@@ -110,6 +120,7 @@ public struct RoomModel: Codable, Sendable, Equatable {
         writeAccess[windowID] = nil
         pauseStates[windowID] = nil
         shareInfo[windowID] = nil
+        controllerByWindow[windowID] = nil
         bump()
         return true
     }
@@ -120,6 +131,17 @@ public struct RoomModel: Codable, Sendable, Equatable {
     public mutating func setShareInfo(_ info: ShareInfo, window: WindowID) -> Bool {
         guard shares[window] != nil, shareInfo[window] != info else { return false }
         shareInfo[window] = info
+        bump()
+        return true
+    }
+
+    /// DISPLAY-ONLY: set (or clear, with `nil`) who is driving a window (F5/F10). Owner broadcasts it
+    /// from its `ActiveControllerLock`. Authorization NEVER reads this (D12). Fails for unknown
+    /// windows; no bump when unchanged.
+    @discardableResult
+    public mutating func setController(_ participant: ParticipantID?, window: WindowID) -> Bool {
+        guard shares[window] != nil, controllerByWindow[window] != participant else { return false }
+        controllerByWindow[window] = participant
         bump()
         return true
     }
@@ -182,6 +204,7 @@ public struct RoomModel: Codable, Sendable, Equatable {
             writeAccess[window] = nil
             pauseStates[window] = nil
             shareInfo[window] = nil
+            controllerByWindow[window] = nil
             changed = true
         }
 
@@ -197,6 +220,11 @@ public struct RoomModel: Codable, Sendable, Equatable {
                 if writeAccess[window]?.isEmpty == true { writeAccess[window] = nil }
                 changed = true
             }
+        }
+        // Their driver-ship of OTHER owners' windows is cleared (display mirror).
+        for window in Array(controllerByWindow.keys) where controllerByWindow[window] == participant {
+            controllerByWindow[window] = nil
+            changed = true
         }
 
         if changed { bump() }
@@ -217,6 +245,7 @@ public struct RoomModel: Codable, Sendable, Equatable {
             writeAccess[window] = nil
             pauseStates[window] = nil
             shareInfo[window] = nil
+            controllerByWindow[window] = nil
             changed = true
         }
         for window in Array(controlModes.keys) {
@@ -231,6 +260,10 @@ public struct RoomModel: Codable, Sendable, Equatable {
                 changed = true
             }
         }
+        for window in Array(controllerByWindow.keys) where controllerByWindow[window] == participant {
+            controllerByWindow[window] = nil
+            changed = true
+        }
         // Deliberately NO bump() — receiver-local revision changes break LWW.
         return changed
     }
@@ -239,6 +272,12 @@ public struct RoomModel: Codable, Sendable, Equatable {
 
     public func owner(of window: WindowID) -> ParticipantID? {
         shares[window]
+    }
+
+    /// DISPLAY-ONLY: who is currently driving `window`, per the owner's broadcast mirror; `nil` if
+    /// nobody. NOT an authorization source (D12) — for the "being driven by X" badge only.
+    public func controller(of window: WindowID) -> ParticipantID? {
+        controllerByWindow[window]
     }
 
     /// Interaction mode for a participant on a window; `.watch` unless explicitly changed (F10).
