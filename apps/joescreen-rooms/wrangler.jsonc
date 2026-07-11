@@ -1,0 +1,48 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "joescreen-rooms",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-02-19",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	},
+	// Rooms + invite links for JoeScreen. A KV namespace (ROOMS) maps a short slug → a room name +
+	// SFU URL; /r/<slug> is a shareable landing page that OpenGraph-unfurls (Slack/iMessage) and
+	// deep-links into the app via joescreen://, falling back to the download page. Presence is read
+	// live from the LiveKit RoomService (server-resident API key in secrets). NO app-token minting —
+	// that stays in the Go token server (DECISIONS §5.4); this Worker only does slugs + presence.
+	"vars": {
+		"ENVIRONMENT": "development",
+		// The SFU URL the app dials (wss://…); baked into the invite so every joiner uses the same SFU.
+		"LIVEKIT_URL": "ws://localhost:7880",
+		// The LiveKit RoomService HTTP base (https://…) for presence (ListParticipants). Empty ⇒
+		// presence is reported as unknown rather than failing the page.
+		"LIVEKIT_API_URL": "",
+		// Where the app can be downloaded when the deep link doesn't resolve (no app installed).
+		"DOWNLOAD_URL": "https://joescreen.cheffing.dev"
+	},
+	// KV: slug → { room, sfu } directory. Create with:  wrangler kv namespace create ROOMS
+	"kv_namespaces": [
+		{ "binding": "ROOMS", "id": "REPLACE_WITH_KV_ID" }
+	],
+	// Secrets (set via `wrangler secret put --env production`):
+	//   LIVEKIT_API_KEY, LIVEKIT_API_SECRET — for the RoomService presence Twirp call (HS256 JWT).
+	"env": {
+		"production": {
+			"name": "joescreen-rooms",
+			"routes": [
+				{ "pattern": "rooms.cheffing.dev", "custom_domain": true }
+			],
+			"vars": {
+				"ENVIRONMENT": "production",
+				"LIVEKIT_URL": "wss://sfu.cheffing.dev",
+				"LIVEKIT_API_URL": "https://sfu.cheffing.dev",
+				"DOWNLOAD_URL": "https://joescreen.cheffing.dev"
+			},
+			"kv_namespaces": [
+				{ "binding": "ROOMS", "id": "REPLACE_WITH_KV_ID" }
+			]
+		}
+	}
+}

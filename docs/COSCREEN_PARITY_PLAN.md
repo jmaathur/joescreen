@@ -469,3 +469,11 @@ exact expected outcomes.
   `remoteControlEnabled` + a `.write` capability + real window bounds is a ~1–2h follow-up once the
   TCC grant + spike confirm injection works — the authorizer/injector/pump are all built and tested.
 - **TESTING.md F4/F5 rows (below)** need 2–3 Macs with the grant.
+
+### Backlog #7 — Rooms + invite links (Cloudflare deploy)
+- **DEPLOY: `apps/joescreen-rooms` Worker** (~15 min, Cloudflare account). The Worker + KV logic +
+  invite page + presence are built and machine-verified (12 vitest tests, typecheck clean, local
+  `wrangler dev` smoke: create/invite/api/404/409). To go live: `wrangler kv namespace create ROOMS`
+  → paste the id into `wrangler.jsonc`; `wrangler secret put LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`;
+  set the real `LIVEKIT_URL`/`LIVEKIT_API_URL`; `bun run deploy` (serves `rooms.cheffing.dev`). See
+  `apps/joescreen-rooms/README.md`.
