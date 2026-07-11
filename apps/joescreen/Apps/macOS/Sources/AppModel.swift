@@ -83,6 +83,10 @@ public final class AppModel {
     public private(set) var selectedVideoInputID: String?
     /// The local webcam track for the self-preview tile; non-nil exactly while the camera is on.
     public private(set) var localCameraTrack: VideoTrack?
+    /// Local published screen-share tracks by windowID, for the sharer's OWN thumbnail self-preview
+    /// (you don't subscribe to your own publications, so there's no remote track). Populated when a
+    /// share goes live, cleared on unshare. Observable so the tile re-renders when it becomes available.
+    public private(set) var localWindowTracks: [WindowID: VideoTrack] = [:]
 
     /// Whether to join the next call MUTED (backlog #2). Persisted; default false (join unmuted).
     public var joinMuted: Bool {
@@ -369,6 +373,7 @@ public final class AppModel {
             await transport.unpublishVideoTrack(for: id)
         }
         localCaptures.removeAll()
+        localWindowTracks.removeAll()
         localShareKinds.removeAll()
         localShareBitrates.removeAll()
         shareContext = ShareContext()
@@ -801,6 +806,21 @@ public final class AppModel {
         remoteWindows[windowID]?.track
     }
 
+    /// Whether `windowID` is a window WE are sharing (owned by the local participant). The sharer's own
+    /// share tile has no *remote* track (you don't subscribe to your own publications), so it self-
+    /// previews the LOCAL published track instead — see `localWindowTrack`.
+    public func isLocallyOwnedShare(_ windowID: WindowID) -> Bool {
+        localParticipantID != nil && room.owner(of: windowID) == localParticipantID
+    }
+
+    /// The LOCAL published track for a window WE share, for the sharer's own live thumbnail preview.
+    /// Nil for remote windows (use `remoteWindowTrack`) or if the local track isn't published yet.
+    /// Cached into an observable map when the share goes live (the transport is an actor, so it can't
+    /// be read synchronously from a view) — mirrors how `localCameraTrack` backs the camera preview.
+    public func localWindowTrack(_ windowID: WindowID) -> VideoTrack? {
+        localWindowTracks[windowID]
+    }
+
     /// The source aspect ratio of a shared window (for an aspect-true thumbnail), if known.
     public func remoteWindowAspect(_ windowID: WindowID) -> Double? {
         remoteWindows[windowID]?.aspectRatio
@@ -1134,6 +1154,8 @@ public final class AppModel {
 
             // Commit the context (the share is now live).
             shareContext = pending
+            // Cache the local published track so our own share tile shows a live self-preview.
+            localWindowTracks[windowID] = await transport.localScreenShareTrack(for: windowID)
             // Update authoritative room + broadcast.
             room.addShare(windowID, owner: me)
             // Populate the advisory ShareInfo (title/app/source pixels) captured at start so receivers
@@ -1247,6 +1269,7 @@ public final class AppModel {
     private func teardownFailedShare(_ windowID: WindowID) async {
         if let capture = localCaptures[windowID] { await capture.stop() }
         localCaptures[windowID] = nil
+        localWindowTracks[windowID] = nil
         localShareKinds[windowID] = nil
         localShareBitrates[windowID] = nil
         await transport.unpublishVideoTrack(for: windowID)
@@ -1307,6 +1330,7 @@ public final class AppModel {
             }
 
             shareContext = pending
+            localWindowTracks[windowID] = await transport.localScreenShareTrack(for: windowID)
             room.addShare(windowID, owner: me)
             if let info { room.setShareInfo(info, window: windowID) }
             // Show the sharer's screen-border affordance.
@@ -1347,6 +1371,7 @@ public final class AppModel {
         guard let me = localParticipantID, room.owner(of: windowID) == me else { return }
         if let capture = localCaptures[windowID] { await capture.stop() }
         localCaptures[windowID] = nil
+        localWindowTracks[windowID] = nil
         let kind = localShareKinds[windowID] ?? .window
         localShareKinds[windowID] = nil
         localShareBitrates[windowID] = nil

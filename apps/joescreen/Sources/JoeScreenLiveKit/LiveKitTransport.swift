@@ -512,6 +512,15 @@ public actor LiveKitTransport: MediaTransport {
         room.localParticipant.firstCameraVideoTrack
     }
 
+    /// The LOCAL published screen-share track for `windowID`, for the sharer's OWN thumbnail preview.
+    /// You never subscribe to your own published tracks, so `remoteWindowTrack` is nil for a window
+    /// you share — the tile would show only a placeholder. This returns the local `LocalVideoTrack`
+    /// (a `VideoTrack`, renderable by `SwiftUIVideoView`) so the sharer sees a live self-preview,
+    /// mirroring how `localCameraVideoTrack()` backs the camera self-preview. Nil if not publishing it.
+    public func localScreenShareTrack(for windowID: WindowID) -> VideoTrack? {
+        publishedTracks[windowID]?.track
+    }
+
     /// Whether the camera is currently LIVE (published AND unmuted). Correct source of truth for the
     /// camera toggle: like the mic, `setCamera(enabled:false)` mutes rather than unpublishes, so
     /// publication-existence alone would report "on" while the camera is muted.

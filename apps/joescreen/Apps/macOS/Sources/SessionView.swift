@@ -165,6 +165,7 @@ struct SharedWindowTile: View {
     let windowID: WindowID
     let ownerID: ParticipantID
 
+    private var isLocal: Bool { model.isLocallyOwnedShare(windowID) }
     private var isClosed: Bool { model.isRemoteWindowClosed(windowID) }
     private var isRendering: Bool { model.isRemoteWindowRenderingActive(windowID) }
 
@@ -174,12 +175,18 @@ struct SharedWindowTile: View {
                 .fill(.quaternary)
                 .aspectRatio(16.0/10.0, contentMode: .fit)
                 .overlay {
-                    // Live mini-thumbnail (M10): a SECOND SwiftUIVideoView on the already-held remote
-                    // track (one decode, two renderers; the big window keeps its quality). Gated on the
-                    // window RENDERING (not just open): a soft-hidden window detaches its big renderer
-                    // so adaptive-stream stops SFU forwarding — the thumbnail must detach its renderer
-                    // too, or the second renderer keeps the stream flowing and defeats R24/R32.
-                    if !isClosed, isRendering, let track = model.remoteWindowTrack(windowID) {
+                    // Live mini-thumbnail. For a REMOTE share: a SECOND SwiftUIVideoView on the already-
+                    // held remote track (one decode, two renderers; the big window keeps its quality).
+                    // Gated on the window RENDERING (not just open): a soft-hidden window detaches its big
+                    // renderer so adaptive-stream stops SFU forwarding — the thumbnail must detach its
+                    // renderer too, or the second renderer keeps the stream flowing and defeats R24/R32.
+                    // For OUR OWN share: you never subscribe to your own publications, so there's no
+                    // remote track — render the LOCAL published track instead so the sharer sees a live
+                    // self-preview (previously this fell through to the placeholder glyph — the bug).
+                    if isLocal, let track = model.localWindowTrack(windowID) {
+                        SwiftUIVideoView(track, layoutMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    } else if !isClosed, isRendering, let track = model.remoteWindowTrack(windowID) {
                         SwiftUIVideoView(track, layoutMode: .fit)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     } else {
@@ -191,7 +198,7 @@ struct SharedWindowTile: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(model.color(for: ownerID), lineWidth: 3))
-                .onTapGesture { focusOrReopen() }
+                .onTapGesture { if !isLocal { focusOrReopen() } }
             HStack(spacing: 6) {
                 Circle().fill(model.color(for: ownerID)).frame(width: 8, height: 8)
                 Text(model.shortLabel(for: ownerID))
@@ -199,10 +206,18 @@ struct SharedWindowTile: View {
                 if model.room.pauseState(of: windowID) == .paused {
                     Text("paused").font(.caption2).foregroundStyle(.orange)
                 }
+                if isLocal { Text("sharing").font(.caption2).foregroundStyle(.secondary) }
                 Spacer()
-                Button(isClosed ? "Reopen" : "Focus") { focusOrReopen() }
-                    .buttonStyle(.borderless)
-                    .font(.caption2)
+                // Local share: stop it. Remote share: focus its viewer window (or reopen if closed).
+                if isLocal {
+                    Button("Stop") { model.unshare(windowID) }
+                        .buttonStyle(.borderless)
+                        .font(.caption2)
+                } else {
+                    Button(isClosed ? "Reopen" : "Focus") { focusOrReopen() }
+                        .buttonStyle(.borderless)
+                        .font(.caption2)
+                }
             }
         }
     }
