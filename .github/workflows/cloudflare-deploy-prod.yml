@@ -9,6 +9,7 @@ on:
     paths:
       - "apps/joescreen-download/**"
       - "apps/cheffing-hub/**"
+      - "apps/joescreen-rooms/**"
       - "bun.lock"
       - ".github/workflows/cloudflare-deploy-prod.yml"
   # Manual runs deploy every worker — the recovery path when a push-triggered run failed.
@@ -26,18 +27,23 @@ jobs:
       - name: Detect changed worker apps
         id: changed
         run: |
-          # Worker apps = apps/* dirs that have a wrangler.jsonc.
-          ALL=$(find apps -maxdepth 2 -name wrangler.jsonc | xargs -n1 dirname | xargs -n1 basename | jq -R -s -c 'split("\n") | map(select(length>0))')
+          # Worker apps = apps/* dirs that have a wrangler.jsonc AND are NOT opted out of deploy.
+          # A dir with a `.deploy-disabled` marker is skipped (e.g. it isn't provisioned yet — no
+          # SFU/secrets). Delete that file to re-enable the worker.
+          deployable() { [ -f "$1/wrangler.jsonc" ] && [ ! -f "$1/.deploy-disabled" ]; }
+          ALL=$(find apps -maxdepth 2 -name wrangler.jsonc | xargs -n1 dirname | while read d; do
+            deployable "$d" && basename "$d" || true
+          done | jq -R -s -c 'split("\n") | map(select(length>0))')
           BEFORE="${{ github.event.before }}"
-          # Manual runs, first pushes, and force pushes (no usable diff base) deploy everything.
+          # Manual runs, first pushes, and force pushes (no usable diff base) deploy everything deployable.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
             CHANGED="$ALL"
           else
             RANGE=$(git diff --name-only "$BEFORE" ${{ github.sha }} || true)
             CHANGED=$(echo "$RANGE" | grep -E '^apps/' | cut -d/ -f1-2 | sort -u | while read d; do
-              [ -f "$d/wrangler.jsonc" ] && basename "$d" || true
+              deployable "$d" && basename "$d" || true
             done | jq -R -s -c 'split("\n") | map(select(length>0))')
-            # If the workflow itself or the shared lockfile changed, deploy all workers.
+            # If the workflow itself or the shared lockfile changed, deploy all deployable workers.
             if echo "$RANGE" | grep -qE '^(\.github/workflows/cloudflare-deploy-prod\.yml|bun\.lock)$'; then
               CHANGED="$ALL"
             fi

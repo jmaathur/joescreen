@@ -36,8 +36,13 @@
 			],
 			"vars": {
 				"ENVIRONMENT": "production",
-				"LIVEKIT_URL": "wss://sfu.cheffing.dev",
-				"LIVEKIT_API_URL": "https://sfu.cheffing.dev",
+				// SET THESE when a public LiveKit SFU is deployed (apps/livekit — currently shipped
+				// dark, no hosted URL yet). Until then invite links/presence have no SFU to point at,
+				// so leave them empty; the app-token path is the Go token server, not this worker.
+				//   LIVEKIT_URL:     the wss:// URL the app dials (baked into every invite)
+				//   LIVEKIT_API_URL: the https:// RoomService base for presence
+				"LIVEKIT_URL": "",
+				"LIVEKIT_API_URL": "",
 				"DOWNLOAD_URL": "https://joescreen.cheffing.dev"
 			},
 			"kv_namespaces": [
