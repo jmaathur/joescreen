@@ -1146,21 +1146,38 @@ public final class AppModel {
             if case WindowCaptureService.CaptureError.sensitiveApp = error {
                 shareRefusedReason = "That window belongs to a password manager or Keychain and can't be shared."
             } else if isScreenRecordingDenied(error) {
-                shareRefusedReason = "JoeScreen needs Screen Recording permission. Enable it in System Settings › Privacy & Security › Screen Recording, then try again."
+                shareRefusedReason = recoverFromScreenRecordingDenial()
             }
             await teardownFailedShare(windowID)
         }
     }
 
-    /// True if `error` is ScreenCaptureKit reporting a missing Screen Recording grant. SCStream's
+    /// True if `error` is ScreenCaptureKit reporting a missing/stale Screen Recording grant. SCStream's
     /// `startCapture()` (and `SCShareableContent`) fail with `SCStreamError` code `.userDeclined`
-    /// (-3801) when TCC hasn't granted screen recording. We treat that as the authoritative "not
-    /// granted" signal (replacing the unreliable CGPreflightScreenCaptureAccess preflight) and show a
-    /// clear System-Settings hint — WITHOUT ever firing the redundant CGRequest prompt.
+    /// (-3801) when TCC hasn't granted screen recording — OR when a previously-valid grant went STALE
+    /// after an app update (the toggle still shows ON in System Settings, but the grant is bound to the
+    /// old binary's code-signature/CDHash and macOS no longer honors it for the new build).
     private func isScreenRecordingDenied(_ error: Error) -> Bool {
         let ns = error as NSError
         return ns.domain == SCStreamError.errorDomain
             && ns.code == SCStreamError.Code.userDeclined.rawValue
+    }
+
+    /// Recover from a screen-recording denial. We do NOT preflight (CGPreflightScreenCaptureAccess is
+    /// unreliable and fires a spurious prompt even when granted — the original bug). Instead, only
+    /// AFTER SCStream actually denied do we call CGRequestScreenCaptureAccess() ONCE: on a genuine
+    /// first-time denial it shows the one legitimate grant prompt; on a STALE grant (toggle ON but
+    /// bound to the old binary after an update) it re-establishes the binding to the current build.
+    /// Either way the user then retries the share and it works — no manual System-Settings toggling.
+    /// Returns the message to surface (asking them to grant + retry).
+    private func recoverFromScreenRecordingDenial() -> String {
+        // Reactive request (macOS shows the prompt / re-binds the grant). Fire-and-read; the result is
+        // advisory — the authoritative retry is the user's next share attempt.
+        let granted = CGRequestScreenCaptureAccess()
+        AppLog.info("screen-recording denied by SCStream; requested access → \(granted)")
+        return granted
+            ? "Screen Recording was just re-enabled for this version of JoeScreen. Please try sharing again."
+            : "JoeScreen needs Screen Recording permission. Enable it in System Settings › Privacy & Security › Screen Recording (toggle JoeScreen OFF then ON if it's already listed), then try again."
     }
 
     /// The structural encode-session cap check, knowable UP FRONT (before capture/pixels). Gating on
@@ -1300,7 +1317,7 @@ public final class AppModel {
         } catch {
             AppLog.error("startSharingDisplay failed: \(String(describing: error))")
             if isScreenRecordingDenied(error) {
-                shareRefusedReason = "JoeScreen needs Screen Recording permission. Enable it in System Settings › Privacy & Security › Screen Recording, then try again."
+                shareRefusedReason = recoverFromScreenRecordingDenial()
             }
             await teardownFailedShare(windowID)
         }
