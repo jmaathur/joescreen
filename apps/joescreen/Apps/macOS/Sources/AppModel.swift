@@ -432,6 +432,9 @@ public final class AppModel {
             case .closeWindow:
                 windowManager.close(windowID)
             case .unsubscribe:
+                // Hard unsubscribe = zero downlink, no decode. Mark the entry inactive so the decode
+                // budget and any thumbnail renderer treat it as not-decoding until it resubscribes.
+                remoteWindows[windowID]?.isRenderingActive = false
                 Task { await transport.setWindowTrackSubscribed(windowID: windowID, false) }
             case .resubscribe:
                 Task { await transport.setWindowTrackSubscribed(windowID: windowID, true) }
@@ -452,6 +455,7 @@ public final class AppModel {
         if let existing = remoteWindows[windowID] {
             existing.track = track
             existing.isReconnecting = false
+            existing.isRenderingActive = true // the track is back → decoding again (reopen/reconnect)
             windowManager.replaceContent(existing)
             cancelGrace(windowID)
             feed(windowID, .trackSubscribed)
@@ -503,7 +507,9 @@ public final class AppModel {
             remotes: remotes,
             displayName: { [weak self] in self?.displayNames[$0] },
             hasRenderableCamera: { [weak self] in self?.cameraTracks[$0] != nil },
-            sharesDecoded: remoteWindows.count)
+            // Only windows actually decoding count against the budget — a user-closed (hard-
+            // unsubscribed) or soft-hidden window consumes no decode/downlink.
+            sharesDecoded: decodingShareCount)
     }
 
     /// Raise all shared windows owned by `owner` (tap a participant tile).
@@ -523,6 +529,21 @@ public final class AppModel {
     /// The source aspect ratio of a shared window (for an aspect-true thumbnail), if known.
     public func remoteWindowAspect(_ windowID: WindowID) -> Double? {
         remoteWindows[windowID]?.aspectRatio
+    }
+
+    /// Whether a shared window is actively rendering (open, not soft-hidden). The share thumbnail
+    /// must gate its SECOND renderer on this too: a soft-hidden (miniaturized/occluded) window
+    /// detaches its big renderer so adaptive-stream stops SFU forwarding — a thumbnail renderer left
+    /// attached would keep the stream flowing and defeat the R24/R32 soft-hide.
+    public func isRemoteWindowRenderingActive(_ windowID: WindowID) -> Bool {
+        remoteWindows[windowID]?.isRenderingActive ?? false
+    }
+
+    /// Count of shared windows ACTUALLY decoding right now (open AND rendering) — used for the decode
+    /// budget. A user-closed window stays in `remoteWindows` (reopenable) but is hard-unsubscribed at
+    /// the SFU (zero decode), so it must NOT count against the budget.
+    private var decodingShareCount: Int {
+        remoteWindows.values.filter { $0.isRenderingActive }.count
     }
 
     // MARK: - Camera tiles (M10)

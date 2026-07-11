@@ -221,6 +221,29 @@ only unpublish on a later crash — hooking one leaks), deduped per SID. **Why:*
 and M11 (`display:`) both build on this one contract; a single implementation keeps the wire rule
 (extend-never-break) enforceable in one place.
 
+## D17 — Participant tiles: display names + media presence + decode budget (M10)
+- **Display names via the JWT `name` claim.** The client puts an optional top-level `name` claim in
+  its token (DevTokenMinter in DEBUG; the Go token server's `SetName` in release); LiveKit surfaces
+  it as `participant.name` and the SFU distributes it to everyone, including late joiners. **Why over
+  the alternatives:** participant *metadata* is more plumbing for the same result and needs a
+  `canUpdateOwnMetadata` grant; a *state-channel profile message* has no late-join story (non-sharers
+  never broadcast today). The `name` claim is zero wire-protocol surface and free late-join. Fallback
+  everywhere: the existing 4-char UUID label.
+- **Mic/camera-off is a MUTE, read from `publication.isMuted`.** LiveKit `setCamera(false)`/
+  `setMicrophone(false)` mute rather than unpublish, so a muted camera track stays subscribed. The
+  tile's `cameraOn`/`micLive` MUST derive from `isMuted` (via `isCameraEnabled()`/`isMicrophoneEnabled()`
+  + didUpdateIsMuted), NEVER from track un/subscription — otherwise a camera-off peer renders a frozen
+  last frame instead of an avatar. A correctness invariant, enforced in `ParticipantMediaReducer` +
+  the transport's `handleMuteChanged`.
+- **Cameras keep SDK-default simulcast ON.** D5's simulcast-OFF rule governs SHARE tracks only. Camera
+  tracks stay simulcast-on so adaptive-stream can downshift thumbnail tiles cheaply. (Reversible if a
+  measured decode budget says otherwise.)
+- **Decode budget: 6 decoded video streams total, shares first.** `TileSubscriptionPlanner` gives
+  shares priority and parks cameras beyond the remaining budget as avatars (no renderer → the SFU
+  stops forwarding that stream). Default 6 is a placeholder pending the Phase-0(f) hardware
+  measurement; a single constant to change. Off-screen tiles also self-limit via `LazyHStack`
+  detaching renderers.
+
 ---
 
 ### Derived per-codec QP bounds (D5)

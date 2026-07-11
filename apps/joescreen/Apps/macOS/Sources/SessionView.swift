@@ -117,6 +117,7 @@ struct SharedWindowTile: View {
     let ownerID: ParticipantID
 
     private var isClosed: Bool { model.isRemoteWindowClosed(windowID) }
+    private var isRendering: Bool { model.isRemoteWindowRenderingActive(windowID) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -125,9 +126,11 @@ struct SharedWindowTile: View {
                 .aspectRatio(16.0/10.0, contentMode: .fit)
                 .overlay {
                     // Live mini-thumbnail (M10): a SECOND SwiftUIVideoView on the already-held remote
-                    // track (one decode, two renderers; the big window keeps its quality). Falls back
-                    // to a glyph while the window is closed (no track) or not yet open.
-                    if !isClosed, let track = model.remoteWindowTrack(windowID) {
+                    // track (one decode, two renderers; the big window keeps its quality). Gated on the
+                    // window RENDERING (not just open): a soft-hidden window detaches its big renderer
+                    // so adaptive-stream stops SFU forwarding — the thumbnail must detach its renderer
+                    // too, or the second renderer keeps the stream flowing and defeats R24/R32.
+                    if !isClosed, isRendering, let track = model.remoteWindowTrack(windowID) {
                         SwiftUIVideoView(track, layoutMode: .fit)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     } else {
