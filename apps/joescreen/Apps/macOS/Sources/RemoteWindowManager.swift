@@ -48,6 +48,7 @@ final class RemoteWindowManager {
         let content = RemoteVideoView(window: remote)
             .environment(model)
             .environment(overlayModel)
+            .environment(model.drawState)
 
         let hosting = NSHostingController(rootView: content)
         let window = NSWindow(contentViewController: hosting)
@@ -101,6 +102,7 @@ final class RemoteWindowManager {
         let content = RemoteVideoView(window: remote)
             .environment(model)
             .environment(managed.overlayModel)
+            .environment(model.drawState)
         managed.window.contentViewController = NSHostingController(rootView: content)
         managed.window.title = titleFor(remote, model: model)
         if let aspect = remote.aspectRatio, aspect > 0 {

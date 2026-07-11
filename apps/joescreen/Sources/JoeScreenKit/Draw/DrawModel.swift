@@ -115,4 +115,7 @@ public struct DrawModel: Codable, Sendable, Equatable {
     public func strokeCount(in window: WindowID) -> Int {
         strokesByWindow[window]?.values.reduce(0) { $0 + $1.count } ?? 0
     }
+
+    /// Whether there is no ink anywhere (for the late-joiner seed guard).
+    public var isEmpty: Bool { strokesByWindow.isEmpty }
 }

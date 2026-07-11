@@ -64,12 +64,17 @@ struct RemoteVideoView: View {
                     SwiftUIVideoView(window.track, layoutMode: .fit)
                         .ignoresSafeArea()
                 }
+                // Annotation ink overlay (F9): every participant's strokes; captures local strokes in
+                // draw mode. Mapped through the same VideoFitMath content rect so ink aligns per-pixel.
+                DrawOverlay(windowID: window.windowID, size: geo.size, videoAspect: window.aspectRatio)
                 // Per-window cursor overlay for every remote participant (M6), mapped through the
                 // same VideoFitMath content rect so overlay glyphs sit on the right pixel.
                 CursorOverlay(windowID: window.windowID, size: geo.size,
                               videoAspect: window.aspectRatio)
                 // Pause / reconnecting state badges (state already broadcast; surfaced here in M9).
                 overlayBadges
+                // Draw toolbar (F9): toggle draw mode, undo, clear the local author's ink.
+                DrawToolbar(windowID: window.windowID)
             }
             .overlay(
                 Rectangle()

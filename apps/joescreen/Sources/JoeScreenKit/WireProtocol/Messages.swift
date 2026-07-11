@@ -246,7 +246,11 @@ public struct DrawUndo: WireMessage {
 public struct RoomSnapshot: WireMessage {
     public static let kind: MessageKind = .roomSnapshot
     public var model: RoomModel
-    public init(model: RoomModel) { self.model = model }
+    /// Replicated annotation ink (F9), so a LATE JOINER catches up on existing strokes in one shot.
+    /// Optional + synthesized `decodeIfPresent` — an old peer (or a snapshot with no ink) decodes
+    /// nil, never breaks (additive-only).
+    public var draw: DrawModel?
+    public init(model: RoomModel, draw: DrawModel? = nil) { self.model = model; self.draw = draw }
 }
 
 /// A discrete share/unshare notification on the `state` channel. Snapshots carry authoritative

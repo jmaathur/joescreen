@@ -132,6 +132,13 @@ public final class AppModel {
     /// (DECISIONS §5.5 — security posture wins). Drives the control-bar toggle.
     public private(set) var clipboardSyncEnabled = false
 
+    /// Replicated annotation ink (F9, backlog #9). Observed by the DrawOverlay; mutated by the pump.
+    let drawState = DrawState()
+    private var drawPump: DrawPump?
+    /// The local author's monotonic draw sequence — assigned HERE (MainActor) so the optimistic
+    /// local apply and the transmitted op carry the SAME seq (no duplicate on the inbound echo).
+    private var drawSequencer = DrawAuthorSequencer()
+
     // MARK: - Collaborators
 
     private let transport = LiveKitTransport()
@@ -308,6 +315,11 @@ public final class AppModel {
             // Prepare the clipboard pump (F6) — created but DISABLED (session-scoped, default OFF).
             let clipboard = try await transport.openDataChannel(.clipboard)
             clipboardPump = ClipboardPump(channel: clipboard, localID: localParticipantID)
+            // Draw pump (F9): apply inbound ink to the shared DrawState.
+            let drawCh = try await transport.openDataChannel(.draw)
+            let drawPump = DrawPump(channel: drawCh, localID: localParticipantID)
+            self.drawPump = drawPump
+            startDrawInPump(drawPump)
             phase = .inCall
             // Seed the local participant into the roster immediately.
             if let me = localParticipantID { participants.insert(me) }
@@ -379,6 +391,9 @@ public final class AppModel {
         clipboardPump?.stop()
         clipboardPump = nil
         clipboardSyncEnabled = false
+        drawPump = nil
+        drawSequencer = DrawAuthorSequencer()
+        drawState.reset()
         activeDriver = nil
         pendingControlRequest = nil
         secureInputBanner = .none
@@ -546,6 +561,48 @@ public final class AppModel {
         clipboardPump?.setEnabled(on)
     }
 
+    // MARK: - Draw / annotation (F9)
+
+    private func startDrawInPump(_ pump: DrawPump) {
+        pumps.append(Task { @MainActor [weak self] in
+            await pump.runInbound(
+                mutate: { apply in self?.drawState.apply(apply) },
+                onChange: { _ in /* DrawState.rev already bumps the Canvas */ })
+        })
+    }
+
+    /// Toggle local draw mode (capture strokes vs. pass hover through).
+    public func toggleDrawMode() { drawState.drawModeEnabled.toggle() }
+
+    /// Send a completed local stroke (from the DrawOverlay drag) in the local participant's color.
+    /// The seq is assigned HERE so the optimistic local apply and the transmitted op are identical —
+    /// the inbound echo is then a same-seq no-op (rejectedStaleSequence), not a duplicate stroke.
+    public func sendStroke(windowID: WindowID, points: [NormalizedPoint]) {
+        guard let me = localParticipantID, points.count > 1 else { return }
+        let c = ParticipantColor.components(for: me)
+        let color = RGBAColor(r: c.r, g: c.g, b: c.b, a: 1)
+        let op = DrawOp(authorID: me, authorSeq: drawSequencer.advance(), windowID: windowID,
+                        points: points, color: color, width: 3)
+        drawState.apply { $0.apply(op) }
+        Task { await drawPump?.send(op) }
+    }
+
+    /// Undo the local author's most recent stroke in a window (per-author undo).
+    public func undoDraw(windowID: WindowID) {
+        guard let me = localParticipantID else { return }
+        let undo = DrawUndo(authorID: me, windowID: windowID)
+        drawState.apply { $0.apply(undo) }
+        Task { await drawPump?.send(undo) }
+    }
+
+    /// Clear the local author's ink in a window (per-author clear).
+    public func clearDraw(windowID: WindowID) {
+        guard let me = localParticipantID else { return }
+        let clear = DrawClear(authorID: me, windowID: windowID)
+        drawState.apply { $0.apply(clear) }
+        Task { await drawPump?.send(clear) }
+    }
+
     /// Apply an inbound `state`-channel payload: a RoomSnapshot (full state, revision-gated) or a
     /// ShareEvent (open/close a viewer window promptly).
     private func applyStatePayload(_ data: Data) {
@@ -558,6 +615,12 @@ public final class AppModel {
             // Last-writer-wins: only apply a strictly newer snapshot.
             if snap.model.revision > room.revision || room.revision == 0 {
                 applyRoom(snap.model)
+            }
+            // Late-joiner ink catch-up (F9): if we hold no ink yet and the snapshot carries some,
+            // seed it. DrawModel.apply is monotonic per-author, so re-seeding once is safe; we only
+            // do it while empty to avoid clobbering live local strokes with a stale snapshot.
+            if let ink = snap.draw, !ink.isEmpty, drawState.model.isEmpty {
+                drawState.apply { $0 = ink }
             }
         case .shareEvent:
             guard let ev = try? WireCodec.unpack(envelope, as: ShareEvent.self) else { return }
@@ -1257,7 +1320,8 @@ public final class AppModel {
 
     private func broadcastState() {
         guard let me = localParticipantID, let channel = stateChannel else { return }
-        let snap = RoomSnapshot(model: room)
+        // Include the current ink so a LATE JOINER catches up on annotations in one shot (F9).
+        let snap = RoomSnapshot(model: room, draw: drawState.model)
         guard let env = try? WireCodec.pack(snap, sender: me),
               let bytes = try? WireCodec.encode(env) else { return }
         Task { try? await channel.send(bytes) }
