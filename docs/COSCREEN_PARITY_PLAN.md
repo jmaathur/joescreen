@@ -453,3 +453,19 @@ exact expected outcomes.
   exercise the DisplayPickResolver floor path). Skippable if no 14.x hardware.
 - **TESTING.md M11-9 sharer border overlay + "Sharing Display" chip/stop** (~3 min, 2 Macs — confirm
   the border is invisible to the receiver).
+
+### Backlog #1 — Remote control MVP (F4)
+- **TCC: grant `kTCCServicePostEvent` (Accessibility → "Allow the app to control your computer")**
+  (~1 min, once). Unblocks ALL live injection. The app preflights via
+  `InjectionPermissions.requestPostEventAccess()`; a human must approve in System Settings and
+  relaunch (ad-hoc re-signing may re-prompt — R4). Optional: `kTCCServiceAccessibility` for AX
+  focus-assist.
+- **SPIKE: Phase-0(c) injection-strategy validation** (~30–60 min, 1 Mac). Verify `CGEvent` injection
+  reaches an unfocused target window under each `InjectionStrategy` (hidTap / postToPid / hybrid),
+  incl. tagged-event local-override. The result flips `CGEventInjector.strategy` (default hidTap) — a
+  config change, not a rewrite. Until run, the app ships hidTap.
+- **WIRING: owner grant path.** The InputPump currently ships `remoteControlEnabled=false` (safe
+  default) with a nil bounds provider, so nothing injects. Wiring the consent approval to actually set
+  `remoteControlEnabled` + a `.write` capability + real window bounds is a ~1–2h follow-up once the
+  TCC grant + spike confirm injection works — the authorizer/injector/pump are all built and tested.
+- **TESTING.md F4/F5 rows (below)** need 2–3 Macs with the grant.
