@@ -16,6 +16,9 @@ enum TokenClient {
         case badBaseURL
         case httpStatus(Int)
         case emptyToken
+        /// The token server returned an SFU URL with an insecure (plaintext ws://) scheme — refused
+        /// in Release so a misconfigured/compromised server can't silently downgrade media to plaintext.
+        case insecureSFUScheme(String)
     }
 
     /// The resolved credentials for a join: the JWT plus the AUTHORITATIVE SFU URL the token server
@@ -37,6 +40,15 @@ enum TokenClient {
     static func fetch(server: URL, room: String, identity: String, name: String? = nil) async throws -> Credentials {
         var comps = URLComponents(url: server, resolvingAgainstBaseURL: false)
         comps?.path = "/token"
+        // Normalize the FETCH scheme to http(s): `server` may arrive as ws:// / wss:// (that's how
+        // DirectJoinParameters.serverURL is documented, e.g. from a joescreen:// deep link), but
+        // URLSession.data(from:) only speaks http/https — ws/wss would fail with unsupportedURL. Map
+        // wss→https, ws→http; leave http(s) as-is.
+        switch comps?.scheme?.lowercased() {
+        case "wss": comps?.scheme = "https"
+        case "ws":  comps?.scheme = "http"
+        default:    break
+        }
         var items = [
             URLQueryItem(name: "room", value: room),
             URLQueryItem(name: "identity", value: identity),
@@ -53,6 +65,13 @@ enum TokenClient {
         guard !decoded.token.isEmpty else { throw TokenError.emptyToken }
         // The server tells us where the SFU is; fall back to the request host only if it omits it.
         let sfuURL = URL(string: decoded.url) ?? server
+        // Refuse a plaintext SFU dial in Release: a misconfigured/compromised token server returning
+        // ws:// / http:// would silently send all signaling + media negotiation in the clear (ATS is
+        // disabled app-wide for the dev/LAN path). DEBUG keeps ws:// so the local dev SFU works.
+        #if !DEBUG
+        let scheme = sfuURL.scheme?.lowercased() ?? ""
+        guard scheme == "wss" || scheme == "https" else { throw TokenError.insecureSFUScheme(scheme) }
+        #endif
         return Credentials(token: decoded.token, sfuURL: sfuURL)
     }
 }
