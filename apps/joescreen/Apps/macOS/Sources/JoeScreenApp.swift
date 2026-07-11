@@ -17,18 +17,30 @@ struct JoeScreenApp: App {
         let launchJoin = DirectJoinParameters.fromLaunchArguments(args)
         // Optional --share-window-id <CGWindowID> to auto-share a window after joining (automation).
         let shareWindowID = JoeScreenApp.parseShareWindowID(args)
-        _model = State(initialValue: AppModel(launchJoin: launchJoin, autoShareWindowID: shareWindowID))
+        // Optional --share-display-id <CGDirectDisplayID> / --share-main-display to auto-share a screen.
+        let shareDisplayID = JoeScreenApp.parseShareDisplayID(args)
+        _model = State(initialValue: AppModel(
+            launchJoin: launchJoin, autoShareWindowID: shareWindowID, autoShareDisplayID: shareDisplayID))
     }
 
     /// Parse `--share-window-id <n>` (or `--share-window-id=<n>`) from the launch args.
     static func parseShareWindowID(_ args: [String]) -> UInt32? {
+        parseUInt32Flag(args, flag: "--share-window-id")
+    }
+
+    /// Parse `--share-display-id <n>` / `--share-display-id=<n>`, or `--share-main-display`
+    /// (resolves to the main display ID) from the launch args.
+    static func parseShareDisplayID(_ args: [String]) -> CGDirectDisplayID? {
+        if args.contains("--share-main-display") { return CGMainDisplayID() }
+        return parseUInt32Flag(args, flag: "--share-display-id")
+    }
+
+    private static func parseUInt32Flag(_ args: [String], flag: String) -> UInt32? {
         var i = 0
         while i < args.count {
             let a = args[i]
-            if a == "--share-window-id", i + 1 < args.count { return UInt32(args[i + 1]) }
-            if a.hasPrefix("--share-window-id=") {
-                return UInt32(a.dropFirst("--share-window-id=".count))
-            }
+            if a == flag, i + 1 < args.count { return UInt32(args[i + 1]) }
+            if a.hasPrefix("\(flag)=") { return UInt32(a.dropFirst(flag.count + 1)) }
             i += 1
         }
         return nil

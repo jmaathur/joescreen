@@ -115,11 +115,15 @@ public final class AppModel {
     private var launchJoinFired = false
     /// Optional CGWindowID to auto-share after joining (the --share-window-id automation path).
     private var autoShareWindowID: UInt32?
+    /// Optional CGDirectDisplayID to auto-share after joining (--share-display-id / --share-main-display).
+    private var autoShareDisplayID: CGDirectDisplayID?
     private var pumps: [Task<Void, Never>] = []
 
-    public init(launchJoin: DirectJoinParameters? = nil, autoShareWindowID: UInt32? = nil) {
+    public init(launchJoin: DirectJoinParameters? = nil, autoShareWindowID: UInt32? = nil,
+                autoShareDisplayID: CGDirectDisplayID? = nil) {
         self.launchJoin = launchJoin
         self.autoShareWindowID = autoShareWindowID
+        self.autoShareDisplayID = autoShareDisplayID
         if launchJoin != nil { self.showJoinSheet = false }
         windowManager.model = self
     }
@@ -244,6 +248,11 @@ public final class AppModel {
             if let cgWindowID = autoShareWindowID {
                 autoShareWindowID = nil
                 shareWindow(cgWindowID: cgWindowID)
+            }
+            // Automation: auto-share a display if --share-display-id / --share-main-display was passed.
+            if let displayID = autoShareDisplayID {
+                autoShareDisplayID = nil
+                shareDisplay(displayID: displayID)
             }
         } catch {
             fail(String(describing: error))
@@ -800,10 +809,25 @@ public final class AppModel {
     }
 
     private func beginShareViaPicker() async {
-        // The picker (SCContentSharingPicker) calls back with the chosen window's CGWindowID.
-        SharePicker.shared.present { [weak self] cgWindowID in
-            Task { @MainActor in self?.shareWindow(cgWindowID: cgWindowID) }
-        }
+        // The picker (SCContentSharingPicker) calls back with the chosen window OR display (M11).
+        SharePicker.shared.present(onPick: { [weak self] pick in
+            Task { @MainActor in
+                switch pick {
+                case .window(let cgWindowID): self?.shareWindow(cgWindowID: cgWindowID)
+                case .display(let displayID): self?.shareDisplay(displayID: displayID)
+                }
+            }
+        }, onAmbiguous: { [weak self] in
+            Task { @MainActor in
+                self?.shareRefusedReason = "Couldn't identify the selected screen. Please pick it again."
+            }
+        })
+    }
+
+    /// Share a whole display by CGDirectDisplayID (the picker callback AND the --share-display-id /
+    /// --share-main-display automation bypass land here). Full capture path lands in M11.5.
+    public func shareDisplay(displayID: CGDirectDisplayID) {
+        Task { await startSharingDisplay(displayID: displayID) }
     }
 
     private func startSharing(cgWindowID: CGWindowID) async {
@@ -924,6 +948,13 @@ public final class AppModel {
 
     /// Dismiss the admission-refusal alert.
     public func dismissShareRefusal() { shareRefusedReason = nil }
+
+    /// Start sharing a whole display. The DisplayCaptureService + naming + renegotiation land in
+    /// M11.4/M11.5; this is the entry point the picker/automation resolve to.
+    private func startSharingDisplay(displayID: CGDirectDisplayID) async {
+        // Implemented in M11.5 (DisplayCaptureService wiring + one-display-per-sharer + renegotiation).
+        AppLog.info("startSharingDisplay displayID=\(displayID) — full path lands in M11.5")
+    }
 
     /// Push a share context to the transport (windowCount + wholeDisplay) — the transport's
     /// CodecSelector reads it when building publish options at completePublish (D5).
