@@ -84,6 +84,12 @@ public final class AppModel {
     /// The local webcam track for the self-preview tile; non-nil exactly while the camera is on.
     public private(set) var localCameraTrack: VideoTrack?
 
+    /// Whether to join the next call MUTED (backlog #2). Persisted; default false (join unmuted).
+    public var joinMuted: Bool {
+        get { UserDefaults.standard.bool(forKey: "JoeScreen.joinMuted") }
+        set { UserDefaults.standard.set(newValue, forKey: "JoeScreen.joinMuted") }
+    }
+
     /// The live connected-participant set as reported by the transport (local + all remotes). The
     /// authoritative membership source; the displayed `participants` roster is recomputed from this
     /// unioned with current share owners. Kept separate so disconnects actually remove people.
@@ -246,8 +252,10 @@ public final class AppModel {
             let state = try await transport.openDataChannel(.state)
             self.stateChannel = state
             startStatePump(state)
-            // Enable the mic on join (M5).
-            try? await transport.setMicrophone(enabled: true)
+            // Enable the mic on join (M5) UNLESS the user opted to join muted (backlog #2). Joining
+            // muted still publishes the track (LiveKit mutes rather than unpublishes), so unmuting
+            // later is instant and peers see the correct mic-off badge meanwhile.
+            try? await transport.setMicrophone(enabled: !joinMuted)
             micEnabled = await transport.isMicrophoneEnabled()
             // Start the cursor pump (M6).
             let cursor = try await transport.openDataChannel(.cursor)

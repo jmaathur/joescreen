@@ -13,6 +13,8 @@ struct JoinSheet: View {
     @State private var identity: String = UUID().uuidString
     // Display name (M10): defaults to the macOS full user name; peers see it on tiles + roster.
     @State private var displayName: String = NSFullUserName()
+    // Join muted (backlog #2): defaults to the persisted preference.
+    @State private var joinMuted: Bool = UserDefaults.standard.bool(forKey: "JoeScreen.joinMuted")
 
     private var parsedURL: URL? { URL(string: serverURL.trimmingCharacters(in: .whitespaces)) }
     private var canJoin: Bool {
@@ -43,6 +45,7 @@ struct JoinSheet: View {
                     }
                     .help("Generate a fresh identity")
                 }
+                Toggle("Join muted", isOn: $joinMuted)
             }
             .formStyle(.grouped)
 
@@ -58,6 +61,7 @@ struct JoinSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Join") {
                     guard let url = parsedURL else { return }
+                    model.joinMuted = joinMuted // persist the choice before connecting
                     let name = displayName.trimmingCharacters(in: .whitespaces)
                     model.requestJoin(DirectJoinParameters(
                         serverURL: url,
