@@ -16,6 +16,8 @@ JOIN_URL="${JOIN_URL:-ws://localhost:7880}"
 export SHIP_IOS_ENTITLEMENTS="${SHIP_IOS_ENTITLEMENTS:-iOS/Resources/JoeScreen-iOS-minimal.entitlements}"
 export SHIP_IOS_EXT_ENTITLEMENTS="${SHIP_IOS_EXT_ENTITLEMENTS:-BroadcastExtension/BroadcastExtension-minimal.entitlements}"
 export SHIP_MAC_ENTITLEMENTS="${SHIP_MAC_ENTITLEMENTS:-macOS/Resources/JoeScreen-macOS-empty.entitlements}"
+# Broadcast extension OMITTED by default (project.yml include:); it's an unregistered App ID. See build-ipa.sh.
+export BROADCAST_INCLUDE="${BROADCAST_INCLUDE:-project-broadcast-off.yml}"
 
 echo "▶ regenerating Xcode project"
 xcodegen generate --spec Apps/project.yml >/dev/null

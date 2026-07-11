@@ -62,10 +62,15 @@ export SHIP_IOS_ENTITLEMENTS="${SHIP_IOS_ENTITLEMENTS:-iOS/Resources/JoeScreen-i
 # works before the App Group is registered) vs full (App Group → whole-screen broadcast IPC works).
 export SHIP_IOS_EXT_ENTITLEMENTS="${SHIP_IOS_EXT_ENTITLEMENTS:-BroadcastExtension/BroadcastExtension-minimal.entitlements}"
 export SHIP_MAC_ENTITLEMENTS="${SHIP_MAC_ENTITLEMENTS:-macOS/Resources/JoeScreen-macOS-appstore.entitlements}"
+# Whether to INCLUDE the broadcast-upload extension target at all (project.yml `include:`). Default
+# OFF (no-op stub) so the extension — a distinct App ID that can't be headlessly archive-signed until
+# it's registered, and inert until the App Group is registered — doesn't break the minimal archive.
+# Only `full` (App Group registered) merges the real extension target in.
+export BROADCAST_INCLUDE="${BROADCAST_INCLUDE:-project-broadcast-off.yml}"
 if [ "$PLATFORM" = "ios" ]; then
 	case "${SHIP_ENTITLEMENTS:-minimal}" in
-		full)    export SHIP_IOS_ENTITLEMENTS="iOS/Resources/JoeScreen-iOS.entitlements"; export SHIP_IOS_EXT_ENTITLEMENTS="BroadcastExtension/BroadcastExtension.entitlements"; echo "── iOS entitlements: FULL (SharePlay + App Group — needs group-session approved)";;
-		minimal) export SHIP_IOS_ENTITLEMENTS="iOS/Resources/JoeScreen-iOS-minimal.entitlements"; export SHIP_IOS_EXT_ENTITLEMENTS="BroadcastExtension/BroadcastExtension-minimal.entitlements"; echo "── iOS entitlements: MINIMAL (viewer+voice; no SharePlay yet)";;
+		full)    export SHIP_IOS_ENTITLEMENTS="iOS/Resources/JoeScreen-iOS.entitlements"; export SHIP_IOS_EXT_ENTITLEMENTS="BroadcastExtension/BroadcastExtension.entitlements"; export BROADCAST_INCLUDE="project-broadcast.yml"; echo "── iOS entitlements: FULL (SharePlay + App Group — needs group-session approved; broadcast extension INCLUDED)";;
+		minimal) export SHIP_IOS_ENTITLEMENTS="iOS/Resources/JoeScreen-iOS-minimal.entitlements"; export SHIP_IOS_EXT_ENTITLEMENTS="BroadcastExtension/BroadcastExtension-minimal.entitlements"; export BROADCAST_INCLUDE="project-broadcast-off.yml"; echo "── iOS entitlements: MINIMAL (viewer+voice; no SharePlay; broadcast extension OMITTED)";;
 		*) echo "✖ SHIP_ENTITLEMENTS must be 'minimal' or 'full'" >&2; exit 1;;
 	esac
 else

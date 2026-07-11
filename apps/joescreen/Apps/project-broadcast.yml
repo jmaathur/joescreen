@@ -1,0 +1,69 @@
+# iOS whole-screen broadcast extension — included ONLY when SHIP_ENTITLEMENTS=full (App Group
+# registered). Kept OUT of the default build because a broadcast-upload app-extension is a distinct
+# App ID (com.joescreen.app.ios.broadcast) that must be registered + provisioned in the Developer
+# portal; a headless `xcodebuild archive` with -allowProvisioningUpdates can't development-sign it
+# before that App ID exists, which fails the whole archive. The extension is inert anyway until the
+# App Group group.com.joescreen.app.ios is registered (whole-screen sharing won't work), so the
+# minimal/first-TestFlight build simply omits it. See scripts/build-ipa.sh (BROADCAST_INCLUDE) and
+# docs/SHIPPING_TESTFLIGHT.md.
+#
+# This file is MERGED into project.yml via its `include:`; it (a) adds the broadcast target and
+# (b) re-declares the LiveKit SPM package the extension links. The app's dependency on the extension
+# is added here too via targetTemplates-free target patching: xcodegen merges `targets` by key, and a
+# repeated key deep-merges — so we append the extension dependency to JoeScreen-iOS.
+
+packages:
+  # LiveKit SDK, so the extension can link the `LiveKit` product for LKSampleHandler. Version MUST
+  # match Package.swift's pin (client-sdk-swift 2.15.1).
+  LiveKit:
+    url: https://github.com/livekit/client-sdk-swift.git
+    exactVersion: "2.15.1"
+
+targets:
+  # Deep-merged into the JoeScreen-iOS target from project.yml: adds the embed dependency so the
+  # extension ships inside the app bundle's PlugIns/.
+  JoeScreen-iOS:
+    dependencies:
+      - target: JoeScreen-iOS-broadcast
+
+  # ── iOS Broadcast Upload Extension: whole-screen sharing (iOS Phase 2). ──
+  # A ReplayKit broadcast extension. LiveKit's LKSampleHandler pipes screen sample buffers over a
+  # unix socket in the shared App Group container to the app, which publishes them (BroadcastManager).
+  # iOS can only share the WHOLE screen this way (R6). Runs under a tight (~50 MB, R7) jetsam budget,
+  # so it links ONLY LiveKit and nothing else heavy.
+  JoeScreen-iOS-broadcast:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: BroadcastExtension/Sources
+    dependencies:
+      # Links LiveKit directly for LKSampleHandler (the app gets LiveKit via JoeScreenLiveKit instead).
+      - package: LiveKit
+        product: LiveKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.joescreen.app.ios.broadcast
+        PRODUCT_NAME: JoeScreenBroadcast
+        # Swift 5 like JoeScreenLiveKit — LiveKit's 2.15.1 API isn't Swift-6 strict-concurrency clean.
+        SWIFT_VERSION: "5.0"
+        # Variable-selected entitlements, like the app: minimal (empty → auto-signing works before the
+        # App Group is registered) vs full (App Group → broadcast IPC works).
+        CODE_SIGN_ENTITLEMENTS: ${SHIP_IOS_EXT_ENTITLEMENTS}
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "YES"
+    info:
+      path: BroadcastExtension/Info-Broadcast.plist
+      properties:
+        CFBundleName: JoeScreenBroadcast
+        CFBundleDisplayName: JoeScreen Screen Share
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "12"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          # Module-qualified principal class: <product-module>.<class>. PRODUCT_NAME sets the module.
+          NSExtensionPrincipalClass: JoeScreenBroadcast.SampleHandler
+          NSExtensionAttributes:
+            # Whole-screen (not per-app) broadcast — iOS's only mode outside an app-embedded picker.
+            RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer

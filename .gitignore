@@ -8,6 +8,7 @@ node_modules/
 # ── Swift / Xcode build outputs (now under apps/joescreen/) ──────────────
 build/
 build-ios/
+build-ios*/
 .build/
 DerivedData/
 *.xcuserstate

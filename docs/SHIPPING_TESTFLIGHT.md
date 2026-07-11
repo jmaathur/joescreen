@@ -82,9 +82,15 @@ only need that for a Mac *App Store* public release — out of scope here.)
 | 9 | No version/build-number automation; hardcoded `0.1.0 (1)` in two places/target | project.yml | add a bump step in the ship script (agent) |
 | 10 | No archive/export/upload tooling, no CI, no `ExportOptions.plist` | scripts/ , .github/ | build it (agent) |
 
-Note: the **broadcast extension target doesn't exist** (empty `Apps/BroadcastExtension/`). iOS ships
-**viewer+voice only without it** — the extension is only for iOS *screen-sharing out*, a later phase.
-Do NOT block the first TestFlight on it.
+Note: the **broadcast extension now exists** (`Apps/BroadcastExtension/`, iOS Phase 2 — whole-screen
+sharing out) but is **OMITTED from the default archive** and only merged in when
+`SHIP_ENTITLEMENTS=full` (via the `BROADCAST_INCLUDE` var → `Apps/project-broadcast.yml`). Reason: a
+`com.apple.broadcast-services-upload` extension is a **distinct App ID**
+(`com.joescreen.app.ios.broadcast`) that a headless `xcodebuild archive` can't development-sign until
+it's registered, and it's inert anyway until the **App Group `group.com.joescreen.app.ios`** is
+registered. So the minimal/first-TestFlight archive ships **viewer + voice + camera** without it.
+To ship whole-screen sharing later: register the extension's App ID + the App Group on the portal,
+then build with `SHIP_ENTITLEMENTS=full`. Do NOT block the current TestFlight on it.
 
 ---
 

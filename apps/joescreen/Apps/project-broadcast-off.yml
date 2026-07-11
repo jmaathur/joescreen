@@ -1,0 +1,4 @@
+# Empty stub — the default when the broadcast extension is NOT included (see project-broadcast.yml
+# for why it's gated). xcodegen's `include:` path must resolve to a real file; this is the no-op
+# variant selected by BROADCAST_INCLUDE when SHIP_ENTITLEMENTS != full.
+name: JoeScreen

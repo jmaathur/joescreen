@@ -4,7 +4,7 @@
 	"private": true,
 	"description": "JoeScreen — SharePlay-based CoScreen clone (Swift macOS + iOS). Built by Xcode; this package.json only exposes the Swift/Xcode build to the turbo task graph.",
 	"scripts": {
-		"build": "xcodegen generate --spec Apps/project.yml && xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-macOS -derivedDataPath build build",
+		"build": "BROADCAST_INCLUDE=\"${BROADCAST_INCLUDE:-project-broadcast-off.yml}\" SHIP_IOS_ENTITLEMENTS=\"${SHIP_IOS_ENTITLEMENTS:-iOS/Resources/JoeScreen-iOS-minimal.entitlements}\" SHIP_IOS_EXT_ENTITLEMENTS=\"${SHIP_IOS_EXT_ENTITLEMENTS:-BroadcastExtension/BroadcastExtension-minimal.entitlements}\" SHIP_MAC_ENTITLEMENTS=\"${SHIP_MAC_ENTITLEMENTS:-macOS/Resources/JoeScreen-macOS-empty.entitlements}\" xcodegen generate --spec Apps/project.yml && xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-macOS -derivedDataPath build build",
 		"test": "swift test",
 		"dev": "bash ../../scripts/app.sh",
 		"clean": "rm -rf build .build Apps/JoeScreen.xcodeproj"

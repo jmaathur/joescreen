@@ -41,6 +41,8 @@ echo "✓ signing identity: $DEVID"
 export SHIP_IOS_ENTITLEMENTS="iOS/Resources/JoeScreen-iOS-minimal.entitlements"
 export SHIP_IOS_EXT_ENTITLEMENTS="BroadcastExtension/BroadcastExtension-minimal.entitlements"
 export SHIP_MAC_ENTITLEMENTS="macOS/Resources/JoeScreen-macOS-appstore.entitlements"
+# macOS build doesn't use the iOS broadcast extension; select the no-op include so xcodegen resolves.
+export BROADCAST_INCLUDE="project-broadcast-off.yml"
 
 echo "── regenerating Xcode project (TEAM_ID=$APPLE_TEAM_ID)"
 ( cd "$APP_DIR" && TEAM_ID="$APPLE_TEAM_ID" xcodegen generate --spec Apps/project.yml >/dev/null )
