@@ -40,6 +40,14 @@ public final class AppModel {
     /// The RemoteWindowManager opens/closes native NSWindows to match this set.
     public private(set) var remoteWindows: [WindowID: RemoteVideoWindow] = [:]
 
+    /// Remote participant CAMERA tracks (M10), keyed by owner. Distinct from window shares — these
+    /// render as tiles in the participant strip, not native windows. A muted camera stays subscribed
+    /// (LiveKit mutes rather than unpublishes), so presence here means "renderable camera track"; the
+    /// cameraOn flag in ParticipantMediaState (M10.3) governs whether to show video vs an avatar.
+    public private(set) var cameraTracks: [ParticipantID: JoeScreenLiveKit.RemoteVideoTrackRef] = [:]
+    /// The SID that delivered each owner's camera track, so a trackGone for that SID clears it.
+    private var cameraTrackSIDs: [ParticipantID: String] = [:]
+
     /// Per-window lifecycle state machines (M9). AppModel feeds events (subscribe/gone/close/
     /// reopen/miniaturize/occlude/reconnecting/snapshot-removal) and EXECUTES the returned effects.
     /// All the dead-window/desync correctness lives in the pure `RemoteWindowLifecycle` reducer.
@@ -128,18 +136,43 @@ public final class AppModel {
         #endif
 
         // Install the unified remote-track hook BEFORE connecting so we don't miss early
-        // subscriptions. The descriptor carries the resolved ownerID (correct owner attribution at
-        // subscribe time — no windowID fallback) and sourceKind (M10 camera routing).
+        // subscriptions. The descriptor carries the resolved ownerID (correct owner attribution) and
+        // sourceKind; TrackClassifier routes it to a window share vs a camera tile vs ignore.
         await transport.setOnRemoteTrack { [weak self] descriptor, track in
-            guard let windowID = ShareTrackName.windowID(from: descriptor.trackName) else { return }
+            let classification = TrackClassifier.classify(
+                name: descriptor.trackName, source: descriptor.sourceKind.trackSource)
             let owner = descriptor.ownerID
-            Task { @MainActor in self?.addRemoteWindow(windowID: windowID, ownerHint: owner, track: track) }
+            let sid = descriptor.trackSID
+            Task { @MainActor in
+                guard let self else { return }
+                switch classification {
+                case .windowShare(let windowID):
+                    self.addRemoteWindow(windowID: windowID, ownerHint: owner, track: track)
+                case .camera:
+                    if let owner { self.addCameraTrack(owner: owner, sid: sid, track: track) }
+                case .ignore:
+                    break
+                }
+            }
         }
-        // Install the track-gone hook: a sharer that stops/crashes/disconnects fires this, and we
-        // close + purge the corresponding viewer window (fixes the frozen-ghost leak).
+        // Install the track-gone hook: a sharer/camera that stops/crashes/disconnects fires this, and
+        // we close+purge the viewer window (frozen-ghost fix) or drop the camera tile.
         await transport.setOnTrackGone { [weak self] gone in
-            guard let windowID = ShareTrackName.windowID(from: gone.trackName) else { return }
-            Task { @MainActor in self?.handleRemoteTrackGone(windowID: windowID) }
+            let classification = TrackClassifier.classify(
+                name: gone.trackName, source: gone.sourceKind.trackSource)
+            let owner = gone.ownerID
+            let sid = gone.trackSID
+            Task { @MainActor in
+                guard let self else { return }
+                switch classification {
+                case .windowShare(let windowID):
+                    self.handleRemoteTrackGone(windowID: windowID)
+                case .camera:
+                    if let owner { self.removeCameraTrack(owner: owner, sid: sid) }
+                case .ignore:
+                    break
+                }
+            }
         }
 
         // Install the participant-roster hook BEFORE connecting so early joiners aren't missed. This
@@ -204,6 +237,8 @@ public final class AppModel {
         await transport.disconnect()
         windowManager.closeAll()
         remoteWindows.removeAll()
+        cameraTracks.removeAll()
+        cameraTrackSIDs.removeAll()
         for t in graceTimers.values { t.cancel() }
         graceTimers.removeAll()
         lifecycles.removeAll()
@@ -270,6 +305,9 @@ public final class AppModel {
             for (windowID, win) in remoteWindows where win.ownerID == owner {
                 feed(windowID, .ownerDisconnected)
             }
+            // Drop their camera tile too (M10).
+            cameraTracks[owner] = nil
+            cameraTrackSIDs[owner] = nil
             room.pruneParticipant(owner) // no revision bump
         }
         recomputeRoster()
@@ -419,6 +457,25 @@ public final class AppModel {
         transportParticipants.insert(owner)
         recomputeRoster()
         feed(windowID, .trackSubscribed) // → openWindow effect
+    }
+
+    // MARK: - Camera tiles (M10)
+
+    /// Record a remote participant's camera track for their tile. Keyed by owner; a newer SID for the
+    /// same owner (camera re-enable / republish) replaces the prior one.
+    private func addCameraTrack(owner: ParticipantID, sid: String, track: JoeScreenLiveKit.RemoteVideoTrackRef) {
+        cameraTracks[owner] = track
+        cameraTrackSIDs[owner] = sid
+        transportParticipants.insert(owner)
+        recomputeRoster()
+    }
+
+    /// Drop a remote participant's camera track when its SID goes away (only if it's still the
+    /// current one — a stale gone for a replaced SID is ignored).
+    private func removeCameraTrack(owner: ParticipantID, sid: String) {
+        guard cameraTrackSIDs[owner] == sid else { return }
+        cameraTracks[owner] = nil
+        cameraTrackSIDs[owner] = nil
     }
 
     /// A remote sharer's track went away (stop/crash/disconnect). The reducer decides: park stale

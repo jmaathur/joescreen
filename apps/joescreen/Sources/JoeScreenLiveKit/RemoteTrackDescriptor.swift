@@ -23,6 +23,16 @@ public enum RemoteTrackSourceKind: String, Sendable, Equatable {
         default:                 self = .unknown
         }
     }
+
+    /// Project to the pure `TrackSource` the JoeScreenKit `TrackClassifier` consumes (camera vs
+    /// screen-share vs other — the classifier only needs those three).
+    public var trackSource: TrackSource {
+        switch self {
+        case .camera:           return .camera
+        case .screenShareVideo: return .screenShareVideo
+        default:                return .other
+        }
+    }
 }
 
 /// The single subscribe-hook contract (the design panel's superset — spec §"shared contracts").
