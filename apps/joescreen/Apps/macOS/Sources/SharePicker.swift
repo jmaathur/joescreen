@@ -2,7 +2,11 @@ import Foundation
 import ScreenCaptureKit
 import JoeScreenKit
 
-/// The user's picker choice: a single window or a whole display (M11).
+/// The blocklist of sensitive apps to keep out of the picker + capture (backlog #4).
+@available(macOS 14.0, *)
+private let sensitiveAppPolicy = SensitiveAppPolicy.default
+
+/// The user's choice: a single window or a whole display (M11).
 enum SharePick: Sendable, Equatable {
     case window(CGWindowID)
     case display(CGDirectDisplayID)
@@ -41,6 +45,9 @@ final class SharePicker: NSObject, SCContentSharingPickerObserver, @unchecked Se
         // avoided for the window path; the display path excludes our app in the capture filter).
         // `excludedWindowIDs` is `[Int]` (NSArray<NSNumber>), so map the CGWindowIDs.
         config.excludedWindowIDs = Self.ownWindowIDs().map(Int.init)
+        // Never let sensitive apps (password managers, Keychain) into the picker (backlog #4). The
+        // capture-start check is the belt-and-braces backstop for anything the picker still surfaces.
+        config.excludedBundleIDs = sensitiveAppPolicy.pickerExcludedBundleIDs
         picker.configuration = config
         picker.isActive = true
         picker.present()

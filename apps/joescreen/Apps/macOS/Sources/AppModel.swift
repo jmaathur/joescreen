@@ -1021,6 +1021,9 @@ public final class AppModel {
             broadcastShareEvent(.shared, windowID: windowID, owner: me, info: room.info(of: windowID))
         } catch {
             AppLog.error("startSharing failed: \(String(describing: error))")
+            if case WindowCaptureService.CaptureError.sensitiveApp = error {
+                shareRefusedReason = "That window belongs to a password manager or Keychain and can't be shared."
+            }
             await teardownFailedShare(windowID)
         }
     }

@@ -89,11 +89,18 @@ public actor WindowCaptureService: NSObject, ShareCaptureService {
 
     public enum CaptureError: Error, Equatable {
         case windowNotFound(CGWindowID)
+        /// The chosen window belongs to a sensitive app (password manager / Keychain) — never captured.
+        case sensitiveApp(String)
     }
 
     /// Start capturing the given SCWindow, forwarding complete frames into `sink`. Actor-internal;
     /// callers use `start(cgWindowID:sink:)` to avoid crossing a non-Sendable SCWindow.
     public func start(window: SCWindow, sink: any VideoFrameSink) async throws {
+        // Never capture a sensitive app's window (backlog #4) — the belt-and-braces backstop for
+        // anything the picker's excludedBundleIDs missed (e.g. the --share-window-id bypass).
+        if SensitiveAppPolicy.default.isSensitive(bundleID: window.owningApplication?.bundleIdentifier) {
+            throw CaptureError.sensitiveApp(window.owningApplication?.bundleIdentifier ?? "unknown")
+        }
         let filter = SCContentFilter(desktopIndependentWindow: window)
 
         let config = SCStreamConfiguration()
