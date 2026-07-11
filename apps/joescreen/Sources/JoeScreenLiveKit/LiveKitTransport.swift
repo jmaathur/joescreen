@@ -393,9 +393,11 @@ public actor LiveKitTransport: MediaTransport {
             publishedTracks[windowID]?.publication = publication
             publishedTracks[windowID]?.publishedCodec = codecSelector.current
         } catch {
-            // Publish failed (e.g. disconnected mid-handshake). Surface as a state blip; the caller's
-            // higher-level share flow can retry. We don't crash a live session over one track.
-            updateState(.failed(reason: "publish failed: \(String(describing: error))"))
+            // Publishing ONE track failed (e.g. a mid-handshake timeout). This is a per-track error,
+            // NOT a room-connection failure — don't emit `.failed` (it would crash a live session into
+            // "Couldn't join" over a single track). The higher-level share flow can retry; connection
+            // state stays owned by LiveKitRoomObserver.didUpdateConnectionState.
+            print("JoeScreen: track publish failed (non-fatal, room still connected): \(error)")
         }
     }
 
@@ -610,9 +612,14 @@ public actor LiveKitTransport: MediaTransport {
                     try? await room.localParticipant.unpublish(publication: newPublication)
                 }
             } catch {
-                // Republish failed (disconnected mid-renegotiate). Leave the entry; a later attempt or
-                // teardown handles it. Surface as a state blip.
-                updateState(.failed(reason: "renegotiate failed: \(String(describing: error))"))
+                // Republish of ONE track failed/timed out during codec renegotiation (e.g. LiveKit
+                // Code=101 "Timed out"). This is a per-track hiccup, NOT a room-connection failure —
+                // the room is still connected and all other media keeps flowing. Do NOT emit
+                // `.failed` (that would tear the whole session down into "Couldn't join" even though
+                // the call is fine — the exact bug this replaces). Leave the entry; a later context
+                // change or reshare recovers this track. Connection state stays owned solely by
+                // LiveKitRoomObserver.didUpdateConnectionState (the authoritative source).
+                print("JoeScreen: track renegotiate failed (non-fatal, room still connected): \(error)")
             }
         }
         return renegotiated
@@ -649,7 +656,10 @@ public actor LiveKitTransport: MediaTransport {
                     try? await room.localParticipant.unpublish(publication: newPublication)
                 }
             } catch {
-                updateState(.failed(reason: "bitrate republish failed: \(String(describing: error))"))
+                // Per-track bitrate republish failed — not a room-connection failure; don't emit
+                // `.failed` (see the renegotiate/publish sites). Connection state stays authoritative
+                // via LiveKitRoomObserver.
+                print("JoeScreen: track bitrate republish failed (non-fatal, room still connected): \(error)")
             }
         }
         return count
