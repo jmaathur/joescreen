@@ -12,8 +12,18 @@
   Accessibility, unavailable to sandboxed apps — this is why the app ships via TestFlight/Developer-ID,
   NOT the Mac App Store. TestFlight accepts a non-sandboxed app; it only needs the App Store
   provisioning profile (which the com.apple.application-identifier the profile injects satisfies).
+
+  Hardened Runtime (ENABLE_HARDENED_RUNTIME=YES) is on for notarization. Under hardened runtime the
+  mic/camera are BLOCKED at the runtime layer — before TCC even prompts — unless these device
+  entitlements are present. They are NOT managed/restricted (no Apple approval needed), so they don't
+  break automatic signing. Without them a Release/notarized build can't enable voice or the webcam
+  (the toggle silently no-ops; no permission prompt ever appears). See RISKS / the mic-camera fix.
 -->
 <plist version="1.0">
 <dict>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
+	<true/>
 </dict>
 </plist>
