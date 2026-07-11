@@ -424,3 +424,17 @@ exact expected outcomes.
 - **TESTING.md M9-7 miniaturize/occlude releases SFU downlink (webrtc-internals)** (~10 min, 2 Macs +
   chrome://webrtc-internals or the SFU stats).
 - **TESTING.md M9-8 viewer title bar shows window title + app + owner; aspect-true tile** (~3 min, 2 Macs).
+
+### M10 — participant tile strip (need 2–3 Macs with cameras + mic TCC)
+- **TCC: grant camera + mic to JoeScreen.app** (~1 min, once, per Mac). Unblocks every M10 tile row.
+- **TESTING.md M10-1 3 Macs, distinct names, all tiles + correct names ≤2 s** (~10 min, 3 Macs).
+- **TESTING.md M10-2 mute mic on A → red badge on B/C ≤1 s** (~3 min, 2 Macs).
+- **TESTING.md M10-3 camera off → avatar, NOT a frozen frame** (~3 min, 2 Macs). Verifies the
+  isMuted semantic trap live.
+- **TESTING.md M10-4 speaking ring tracks the actual speaker ≈300 ms** (~5 min, 2–3 Macs). Add a
+  debounce only if it flickers.
+- **TESTING.md M10-5 8-participant decode-budget parking** (~15 min, needs ~8 clients — can be
+  several instances across a couple of Macs). Confirms cameras beyond budget park as avatars.
+- **TESTING.md M10-6 live share thumbnail + tap-to-focus; big window keeps quality** (~5 min, 2 Macs +
+  webrtc-internals to confirm one decode, and that a soft-hidden window drops the downlink even with
+  the thumbnail visible — the review-fixed R24/R32 path).
