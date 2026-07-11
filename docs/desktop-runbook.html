@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JoeScreen desktop runbook — features, testing & debugging</title>
+<meta name="description" content="Current state of the JoeScreen macOS app: every feature, how to run it, and how to test/debug each one. Verified 2026-07-11." />
+<style>
+  :root {
+    --bg: #ffffff; --text: #1a1a21; --muted: #5c5c66; --border: #e4e4ea;
+    --panel: #f7f7fa; --code-bg: #f1f1f5; --accent: #6a4dff;
+    --ok: #1a7f42; --ok-bg: #e5f5eb; --warn: #9a6700; --warn-bg: #fff3d6;
+    --bad: #c2362f; --bad-bg: #fde8e6; --info: #1a5fb4; --info-bg: #e7f0fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e0e12; --text: #ececf1; --muted: #a1a1ab; --border: #2a2a33;
+      --panel: #17171d; --code-bg: #1e1e26; --accent: #8f7aff;
+      --ok: #4ade80; --ok-bg: #10301c; --warn: #fbbf24; --warn-bg: #33270a;
+      --bad: #f87171; --bad-bg: #3a1512; --info: #7cb2f5; --info-bg: #12233a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 48px 28px 80px; }
+  header { margin-bottom: 8px; }
+  h1 { font-size: 30px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .subtitle { color: var(--muted); font-size: 15px; margin: 0 0 18px; }
+  h2 { font-size: 21px; letter-spacing: -0.01em; margin: 44px 0 12px; padding-top: 18px; border-top: 1px solid var(--border); }
+  h2 .step-no { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 8px; }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  p { margin: 10px 0; }
+  a { color: var(--accent); }
+  ul, ol { margin: 10px 0; padding-left: 22px; }
+  li { margin: 5px 0; }
+  code, pre {
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+  }
+  code { background: var(--code-bg); border-radius: 5px; padding: 1.5px 5px; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; line-height: 1.5; margin: 12px 0;
+  }
+  pre code { background: none; padding: 0; }
+  pre .c { color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 12px; border: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; }
+  .table-scroll { overflow-x: auto; }
+  .pill {
+    display: inline-block; font-size: 12px; font-weight: 600; border-radius: 999px;
+    padding: 2px 10px; white-space: nowrap;
+  }
+  .pill.ok   { color: var(--ok);   background: var(--ok-bg); }
+  .pill.warn { color: var(--warn); background: var(--warn-bg); }
+  .pill.bad  { color: var(--bad);  background: var(--bad-bg); }
+  .pill.info { color: var(--info); background: var(--info-bg); }
+  .callout {
+    border: 1px solid var(--border); border-left: 4px solid var(--accent);
+    background: var(--panel); border-radius: 8px; padding: 12px 16px; margin: 16px 0;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.info { border-left-color: var(--info); }
+  .callout.ok   { border-left-color: var(--ok); }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child { margin-bottom: 0; }
+  .lede { font-size: 16px; color: var(--text); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 16px 0; }
+  .card { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: var(--panel); }
+  .card h4 { margin: 0 0 6px; font-size: 15px; }
+  .card p { margin: 0; font-size: 13.5px; color: var(--muted); }
+  .toc { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin: 20px 0 8px; }
+  .toc ol { margin: 6px 0; columns: 2; column-gap: 28px; }
+  .toc a { text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .kbd { display: inline-block; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; font-size: 12px; background: var(--panel); font-family: ui-monospace, Menlo, monospace; }
+  footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>JoeScreen desktop runbook</h1>
+  <p class="subtitle">What the macOS app does today, how to run it, and how to test &amp; debug every feature. Verified against <code>main</code> @ <code>a2f4264</code> · 2026-07-11.</p>
+</header>
+
+<p class="lede">JoeScreen is a CoScreen clone: a multiplayer screen-share tool where people join a session, share individual windows (or a whole display) into floating live windows on everyone's desktop, talk over voice, point with live cursors, draw annotations, sync clipboards, and — with consent — remote-control each other's shared windows. The macOS app is the full-featured client; iOS is a viewer that can also publish mic/camera/screen.</p>
+
+<div class="callout ok">
+  <p><strong>Just want to use it? Download the dmg.</strong> The released app is self-contained: it defaults to the production SFU (<code>sfu.cheffing.dev</code>), so you open it, click <em>Join</em>, and you're in a session — <strong>no toolchain, no local server, no <code>bun run dev</code></strong>. That developer loop (building from source against a local SFU) is a separate path, covered in <a href="#run">§2</a> only if you're hacking on the code.</p>
+</div>
+
+<div class="callout info">
+  <p><strong>What "current state" means.</strong> The macOS vertical slice is built and passing its gate (<span class="pill ok">331 tests / 0 failures</span>, 8 skipped offline). The <strong>dmg is a Release build</strong> pointed at the production SFU (<code>https://sfu.cheffing.dev</code>, which co-hosts the token server); a from-source <strong>Debug</strong> build points at a local SFU (<code>ws://localhost:7880</code>). This runbook is the desktop app; shipping the dmg (build/notarize/publish) lives in <a href="ship-runbook.html">ship-runbook.html</a>.</p>
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#prereqs">Prerequisites &amp; permissions</a></li>
+    <li><a href="#run">Running the app</a></li>
+    <li><a href="#join">Joining a session</a></li>
+    <li><a href="#features">Feature reference</a></li>
+    <li><a href="#test">Testing each feature</a></li>
+    <li><a href="#debug">Debugging &amp; logs</a></li>
+    <li><a href="#gotchas">Known gotchas</a></li>
+  </ol>
+</div>
+
+<h2 id="prereqs"><span class="step-no">1</span>Prerequisites &amp; permissions</h2>
+
+<h3>Toolchain</h3>
+<ul>
+  <li>macOS 14.0+ (deployment target), Apple Silicon.</li>
+  <li>Xcode + command-line tools (<code>xcodebuild</code>), <code>xcodegen</code>, and <code>bun</code> (the monorepo task runner).</li>
+  <li>A local LiveKit server for dev: Homebrew <code>livekit-server</code> v1.13.3. <code>bun run dev</code> starts one automatically if none is running.</li>
+</ul>
+
+<h3>macOS privacy grants (TCC)</h3>
+<p>The app is <strong>non-sandboxed</strong> by design (Developer-ID, not App Store) so features are gated purely by TCC prompts at runtime — there are no capability entitlements to toggle. Grant these in <strong>System Settings → Privacy &amp; Security</strong>:</p>
+<div class="table-scroll"><table>
+  <tr><th>Permission</th><th>Needed for</th><th>When it prompts</th></tr>
+  <tr><td>Screen&nbsp;Recording</td><td>Sharing any window or display</td><td>First <em>Share…</em>; the app preflights with <code>CGRequestScreenCaptureAccess()</code> so the prompt is deterministic.</td></tr>
+  <tr><td>Microphone</td><td>Voice</td><td>First mic-on.</td></tr>
+  <tr><td>Camera</td><td>Webcam "bubble"</td><td>First camera-on.</td></tr>
+  <tr><td>Accessibility</td><td>Being remote-controlled (input injection)</td><td>Only when you <em>approve</em> a control request. Injection needs the <code>kTCCServicePostEvent</code> grant — a human step, never automatic.</td></tr>
+</table></div>
+
+<div class="callout warn">
+  <p><strong>Ad-hoc re-signing resets grants (source builds only).</strong> Local Debug builds are ad-hoc signed, so a rebuild can present a <em>different</em> code identity and macOS may re-prompt for Screen Recording / Accessibility. If a share suddenly fails with a <code>-3801</code> from ScreenCaptureKit, re-grant Screen Recording and relaunch. The signed dmg build keeps a stable identity, so it grants once.</p>
+</div>
+
+<h2 id="run"><span class="step-no">2</span>Running the app</h2>
+
+<p>There are two ways to run JoeScreen. Pick by what you're doing:</p>
+
+<h3>Path A — Download &amp; run the dmg <span class="pill ok">most people</span></h3>
+<ol>
+  <li>Download the dmg from the <a href="index.html">download page</a> (cheffing.dev), open it, and drag <strong>JoeScreen</strong> to Applications.</li>
+  <li>Launch it. Because it's a Release build, the Server URL is <strong>pre-filled with the production SFU</strong> (<code>sfu.cheffing.dev</code>) — you don't type anything.</li>
+  <li>Click <em>Join</em>. You're in the <code>demo</code> room on the live SFU. Grant Screen Recording / Mic / Camera when a feature first asks.</li>
+</ol>
+<p><strong>That's it — no terminal, no <code>bun</code>, no local server.</strong> The app fetches its own token from the server and dials the SFU the server returns. Everything in <a href="#features">§4</a> works from the dmg. To get a second participant, have someone else download the dmg and join the <em>same room name</em> on the <em>same (default) server</em> — or use the same session on a second Mac.</p>
+
+<div class="callout warn">
+  <p><strong>First-launch Gatekeeper.</strong> If the dmg build isn't yet notarized, macOS may block it on first open. Right-click the app → <em>Open</em> (or allow it in Privacy &amp; Security). See <a href="ship-runbook.html">ship-runbook.html</a> for the notarization status.</p>
+</div>
+
+<h3>Path B — Build &amp; run from source <span class="pill info">developers only</span></h3>
+<p>This is for <em>hacking on the code</em>. It builds a <strong>Debug</strong> build that points at a <strong>local</strong> LiveKit SFU (<code>ws://localhost:7880</code>) with an in-process dev token — it does <em>not</em> touch the production server. Requires the toolchain: Xcode + <code>xcodebuild</code>, <code>xcodegen</code>, <code>bun</code>, and Homebrew <code>livekit-server</code> v1.13.3. Run from the repo root:</p>
+<div class="table-scroll"><table>
+  <tr><th>Command</th><th>What it does</th></tr>
+  <tr><td><code>bun run dev [room]</code></td><td>The one-command dev loop: starts <code>livekit-server --dev</code> (reuses a running one), builds <code>JoeScreen-macOS</code>, and launches it joined to <code>ws://localhost:7880</code> in <code>room</code> (default <code>demo</code>). <kbd>Ctrl-C</kbd> stops the SFU.</td></tr>
+  <tr><td><code>bun run app [room]</code></td><td>Builds &amp; launches <em>another</em> instance joined to the same local SFU — this is how you get a second participant on one machine. Each launch gets a fresh random identity so two instances don't collide.</td></tr>
+  <tr><td><code>bun run livekit</code></td><td>Starts just the local SFU (no app).</td></tr>
+  <tr><td><code>bun run build</code> / <code>bun run test</code></td><td>Turbo-driven build / test across the workspace.</td></tr>
+</table></div>
+<p class="muted">The Swift project lives in <code>apps/joescreen/</code>; the Xcode project is generated from <code>Apps/project.yml</code> (the <code>.xcodeproj</code> is gitignored).</p>
+
+<h4>Manual build (when you need Xcode control)</h4>
+<pre><code><span class="c"># from apps/joescreen/</span>
+xcodegen generate --spec Apps/project.yml
+xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-macOS \
+  -derivedDataPath build build
+open build/Build/Products/Debug/JoeScreen.app</code></pre>
+
+<div class="callout">
+  <p><strong>Two-participant testing on one Mac (source path).</strong> Run <code>bun run dev</code> (instance A), then <code>bun run app</code> in a second terminal (instance B). Both land in <code>demo</code> on the local SFU. Share a window from A → it appears as a floating window on B, and vice-versa. Fastest way to exercise nearly every feature. (With the dmg, you'd instead use two Macs, or one Mac + the iOS app, since Release builds can't dial a local server.)</p>
+</div>
+
+<h2 id="join"><span class="step-no">3</span>Joining a session</h2>
+<p>Four ways in, all resolving to the same <code>DirectJoinParameters</code> (server URL + room + a fresh identity + display name):</p>
+<ul>
+  <li><strong>Join sheet</strong> — the default UI. Server URL, room, display name; identity is minted per join.</li>
+  <li><strong>Launch args</strong> (automation/demo, source builds): <code>open -n JoeScreen.app --args --join-url ws://localhost:7880 --room demo</code>. Optional <code>--share-window-id &lt;id&gt;</code>, <code>--share-display-id &lt;id&gt;</code>, or <code>--share-main-display</code> auto-share right after join.</li>
+  <li><strong>Deep link</strong> — <code>joescreen://join?server=&lt;url&gt;&amp;room=&lt;name&gt;</code> (also accepts <code>url=</code>; handled via <code>.onOpenURL</code>). Identity is always fresh per joiner, so an invite link is safe to reuse. This is how <em>Copy Invite Link</em> shares a session with a dmg user.</li>
+  <li><strong>Recents</strong> — the menu-bar and window menu list recent sessions; <em>Copy Invite Link</em> puts a <code>joescreen://join?…</code> URL on the clipboard.</li>
+</ul>
+<div class="callout info">
+  <p><strong>Debug vs Release token flow.</strong> In <strong>Debug</strong>, the app mints a dev-key JWT in-process (<code>DevTokenMinter</code>) and dials the URL as-is — no token server. In <strong>Release</strong>, it fetches a token from the token server, which returns the <em>authoritative</em> SFU URL to dial (the token server and SFU can be different hosts). Release also rejects a non-TLS SFU scheme.</p>
+</div>
+
+<h2 id="features"><span class="step-no">4</span>Feature reference</h2>
+<p>Everything is reachable from the <strong>menu-bar extra</strong> (<span class="muted">person.2.wave.2</span> icon), the <strong>Window menu</strong>, and the in-session control bar.</p>
+
+<div class="grid">
+  <div class="card"><h4>Window &amp; display sharing</h4><p>Share one window (ScreenCaptureKit picker) or a whole display. Each becomes a live floating window on every peer, bordered in the sharer's color. <em>Hover to Share</em> shares whatever window you hover.</p></div>
+  <div class="card"><h4>Voice</h4><p>Mic toggle + input-device picker in the control bar. Muted/unmuted state broadcasts to the roster.</p></div>
+  <div class="card"><h4>Webcam bubbles</h4><p>Camera toggle + device picker (incl. Continuity Camera / iPhone). Your self-preview is mirrored; peers see a camera tile.</p></div>
+  <div class="card"><h4>Live cursors</h4><p>Everyone's pointer is rendered on shared windows at ~60fps (coalesced, latest-wins), colored per participant.</p></div>
+  <div class="card"><h4>Annotations (draw)</h4><p>Toggle draw mode to ink over a shared window. Strokes are convergent per-author with undo/clear; late joiners get existing ink via the room snapshot.</p></div>
+  <div class="card"><h4>Clipboard sync</h4><p>Session-scoped, <strong>default OFF</strong>, never persisted. When on, copy on one machine → paste on another. Echo loops are suppressed.</p></div>
+  <div class="card"><h4>Remote control</h4><p>Request to drive a peer's shared window; the owner sees a consent prompt (<em>Allow / Deny</em>). Only on approval does input injection turn on. iOS can drive a Mac but can never be controlled.</p></div>
+  <div class="card"><h4>Window management</h4><p>Focus/reopen a shared window, <em>Bring All to Front</em>, <em>Always on Top</em> per window, <em>Follow New Shares</em>, and focus-all-shares-of a participant.</p></div>
+  <div class="card"><h4>Roster &amp; presence</h4><p>Live participant list with per-person mic/camera state and colors; SharePlay group-session presence when available.</p></div>
+</div>
+
+<h3>Where each lives in the UI</h3>
+<div class="table-scroll"><table>
+  <tr><th>Feature</th><th>Entry point</th><th>Action</th></tr>
+  <tr><td>Share window/display</td><td>Menu-bar <em>Share…</em>, control bar</td><td><code>beginShare()</code> → <code>shareWindow / shareDisplay</code></td></tr>
+  <tr><td>Mic</td><td>Menu-bar <em>Mute/Unmute Mic</em>, control bar</td><td><code>toggleMic()</code>, <code>selectAudioInput()</code></td></tr>
+  <tr><td>Camera</td><td>Control bar</td><td><code>toggleCamera()</code>, <code>selectVideoInput()</code></td></tr>
+  <tr><td>Clipboard sync</td><td>Toggle</td><td><code>setClipboardSyncEnabled()</code></td></tr>
+  <tr><td>Draw mode</td><td>Per-window draw toolbar</td><td><code>toggleDrawMode()</code>, <code>sendStroke / undoDraw / clearDraw</code></td></tr>
+  <tr><td>Remote control</td><td>Consent dialog</td><td><code>approveControlRequest()</code> / <code>denyControlRequest()</code></td></tr>
+  <tr><td>Window mgmt</td><td>Window menu</td><td><code>bringAllSharedWindowsToFront()</code>, <code>setAlwaysOnTop()</code>, <code>setFollowNewShares()</code></td></tr>
+  <tr><td>Invite</td><td>Menu-bar <em>Copy Invite Link</em></td><td><code>inviteURL</code></td></tr>
+</table></div>
+
+<h2 id="test"><span class="step-no">5</span>Testing each feature</h2>
+
+<p>Baseline setup — you need two participants in one room. Either:</p>
+<ul>
+  <li><strong>From the dmg:</strong> two Macs (or one Mac + the iOS app) each open JoeScreen, keep the default server, and join the same room (<code>demo</code>).</li>
+  <li><strong>From source:</strong> <code>bun run dev</code> (A) + <code>bun run app</code> (B) on one Mac, both in <code>demo</code> on the local SFU.</li>
+</ul>
+<p>With A and B in the same room:</p>
+
+<div class="table-scroll"><table>
+  <tr><th>Feature</th><th>Steps</th><th>Expected</th></tr>
+  <tr><td>Window share</td><td>On A: <em>Share…</em> → pick a window. Grant Screen Recording if prompted.</td><td>A floating live window appears on B, bordered in A's color, titled with the app/window name.</td></tr>
+  <tr><td>Display share</td><td>On A: <em>Share…</em> → pick a display (or launch with <code>--share-main-display</code>).</td><td>The whole screen streams to B as one window; <code>stopDisplayShare()</code> ends it.</td></tr>
+  <tr><td>Voice</td><td>Unmute on both; speak.</td><td>Audio flows both ways; roster shows the correct mic state per person.</td></tr>
+  <tr><td>Camera</td><td>Toggle camera on A; pick a device.</td><td>Self-preview (mirrored) on A; a camera tile for A on B.</td></tr>
+  <tr><td>Cursors</td><td>Move the pointer over a shared window.</td><td>The remote sees your colored cursor tracking in real time.</td></tr>
+  <tr><td>Draw</td><td>On a shared window's <em>draw toolbar</em>: toggle draw mode, ink, undo, clear.</td><td>Ink appears on both; undo/clear converge; a late joiner (<code>bun run app</code> a third instance) sees existing ink on join.</td></tr>
+  <tr><td>Clipboard</td><td>Enable sync on both; copy text on A.</td><td>Paste on B yields A's text. With sync OFF, nothing crosses.</td></tr>
+  <tr><td>Remote control</td><td>From B, request control of A's shared window; on A click <em>Allow</em>; grant Accessibility if prompted.</td><td>B's input drives A's window. <em>Deny</em> blocks it. The roster/badge shows "driven by B".</td></tr>
+  <tr><td>Window mgmt</td><td>Open several shares; use <em>Bring All to Front</em>, <em>Always on Top</em>, <em>Follow New Shares</em>.</td><td>Windows reorder/stay-on-top; new shares auto-focus when Follow is on.</td></tr>
+</table></div>
+
+<h3>Automated gate</h3>
+<pre><code><span class="c"># from apps/joescreen/ — the primary machine gate</span>
+swift build          <span class="c"># 6 library targets</span>
+swift test           <span class="c"># 331 tests (8 skip offline)</span></code></pre>
+<p>The pure logic (arbiter, coalescers, sync engines, wire codec, track naming) is unit-tested and framework-free. <strong>LiveKit integration tests are metadata-only and skip unless <code>LIVEKIT_URL</code> is set</strong> — real device capture hangs a headless host (no TCC prompt), so they never run camera/mic in CI:</p>
+<pre><code>livekit-server --dev &amp;
+LIVEKIT_URL=ws://localhost:7880 swift test --filter JoeScreenLiveKitTests</code></pre>
+
+<h2 id="debug"><span class="step-no">6</span>Debugging &amp; logs</h2>
+
+<h3>Live logs</h3>
+<p>The app logs through <code>AppLog</code> on the unified logging subsystem <code>com.joescreen.app</code>. Stream it:</p>
+<pre><code>log stream --predicate 'subsystem == "com.joescreen.app"' --style compact</code></pre>
+<p>Look for lines from the share path (<code>startSharing…</code>, <code>publishVideoTrack sink ready…</code>, <code>screenCaptureAccess=…</code>) and the connection pump (state transitions, publish failures).</p>
+
+<h3>Common failure signatures</h3>
+<div class="table-scroll"><table>
+  <tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+  <tr><td>Share fails, log shows <code>-3801</code></td><td>Screen Recording not granted (or reset by ad-hoc re-sign)</td><td>Grant it in Privacy &amp; Security, relaunch.</td></tr>
+  <tr><td>Can't connect / stuck "Connecting" (dmg)</td><td>Production SFU unreachable, or the Server URL was edited to something invalid</td><td>Confirm network; reset the Server URL to the default (<code>https://sfu.cheffing.dev</code>).</td></tr>
+  <tr><td>Can't connect / stuck "Connecting" (source)</td><td>Local SFU not running, or wrong URL</td><td><code>bun run livekit</code>; confirm <code>ws://localhost:7880</code>.</td></tr>
+  <tr><td>Remote control does nothing after Allow</td><td>Accessibility (<code>kTCCServicePostEvent</code>) not granted</td><td>Grant Accessibility; injection is human-gated by design.</td></tr>
+  <tr><td>Camera/mic toggle no-ops</td><td>TCC denied earlier</td><td>Reset with <code>tccutil reset Camera</code> / <code>Microphone</code>, relaunch.</td></tr>
+  <tr><td>Share refused with a message</td><td>Encode-session cap or uplink admission refused the share</td><td>Fewer simultaneous shares; the app degrades bitrate before refusing.</td></tr>
+  <tr><td>No video but track "published"</td><td>Frame-before-publish handshake stalled (no frames captured)</td><td>Check the source window is on-screen/visible; ScreenCaptureKit needs it renderable.</td></tr>
+</table></div>
+
+<h3>Reset commands</h3>
+<pre><code>tccutil reset ScreenCapture     <span class="c"># re-prompt for Screen Recording</span>
+tccutil reset Accessibility     <span class="c"># re-prompt for input injection</span>
+tccutil reset Camera; tccutil reset Microphone
+<span class="c"># nuke build state if xcodegen/xcodebuild gets weird:</span>
+cd apps/joescreen &amp;&amp; rm -rf build .build Apps/JoeScreen.xcodeproj</code></pre>
+
+<h2 id="gotchas"><span class="step-no">7</span>Known gotchas</h2>
+<ul>
+  <li><strong>Non-sandboxed on purpose.</strong> Input injection needs <code>kTCCServicePostEvent</code>, which is sandbox-incompatible, so the Mac app is Developer-ID (not Mac App Store). No <code>com.apple.security.device.*</code> entitlements exist.</li>
+  <li><strong>SharePlay/GroupActivities carries no media.</strong> It's used only for presence/signaling; all real-time media flows over the LiveKit SFU. If SharePlay presence is absent, media still works.</li>
+  <li><strong>Info-macOS.plist is generated.</strong> XcodeGen emits it from <code>project.yml</code> (gitignored). Edit <code>project.yml</code>, never the emitted plist.</li>
+  <li><strong>Mesh doesn't scale.</strong> All internet sessions go star-through-SFU; there is no mid-session topology migration. One encoder per shared window at the sharer, not per-peer.</li>
+  <li><strong>iOS is a viewer.</strong> It publishes mic/camera/whole-screen and can drive a Mac, but can never be remote-controlled (no injection API on iOS).</li>
+</ul>
+
+<footer>
+  <p>Generated for the JoeScreen repo · desktop client (<code>JoeScreen-macOS</code>) · verified against <code>main</code> @ <code>a2f4264</code>, 2026-07-11. Companion docs: <a href="ship-runbook.html">ship-runbook.html</a> (dmg + TestFlight), <a href="architecture.md">architecture.md</a>, <a href="../TESTING.md">TESTING.md</a>.</p>
+</footer>
+</div>
+</body>
+</html>
