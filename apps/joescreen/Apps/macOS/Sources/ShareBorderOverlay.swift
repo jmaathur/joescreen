@@ -11,9 +11,7 @@ final class ShareBorderOverlay {
     /// Show the border around `displayID`. Idempotent — re-showing moves it to the given display.
     func show(displayID: CGDirectDisplayID) {
         hide()
-        let frame = CGDisplayBounds(displayID)
-        // CGDisplayBounds is top-left origin (global); convert to AppKit bottom-left for NSWindow.
-        let appKitFrame = Self.toAppKit(globalTopLeft: frame)
+        let appKitFrame = Self.appKitFrame(for: displayID)
 
         let w = NSWindow(contentRect: appKitFrame, styleMask: [.borderless], backing: .buffered, defer: false)
         w.isReleasedWhenClosed = false
@@ -33,11 +31,29 @@ final class ShareBorderOverlay {
         window = nil
     }
 
-    /// Convert a CG global (top-left origin) display rect to an AppKit (bottom-left origin) frame,
-    /// using the total desktop height (max of all screen frames) as the flip reference.
-    private static func toAppKit(globalTopLeft rect: CGRect) -> NSRect {
-        let desktopMaxY = NSScreen.screens.map { $0.frame.maxY }.max() ?? rect.maxY
-        return NSRect(x: rect.minX, y: desktopMaxY - rect.maxY, width: rect.width, height: rect.height)
+    /// The AppKit (bottom-left origin) frame for a display, so the border window exactly covers it.
+    ///
+    /// Multi-display fix: prefer the matching `NSScreen`'s `.frame` — those are ALREADY in AppKit
+    /// global coordinates, so no manual flip (and its multi-monitor pitfalls) is needed. This is what
+    /// makes the border cover the WHOLE correct screen on a 2-monitor setup, where the previous manual
+    /// flip (using `max(all screens' maxY)` as the reference) mislocated/undersized the border on the
+    /// non-primary display.
+    ///
+    /// Fallback (no matching NSScreen — shouldn't happen for a shareable display): flip `CGDisplayBounds`
+    /// against the PRIMARY display's height, since AppKit's global origin is the primary display's
+    /// bottom-left — NOT against the union of all screens (the old bug).
+    private static func appKitFrame(for displayID: CGDirectDisplayID) -> NSRect {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        if let screen = NSScreen.screens.first(where: {
+            // The value is an NSNumber wrapping the CGDirectDisplayID.
+            ($0.deviceDescription[key] as? NSNumber)?.uint32Value == displayID
+        }) {
+            return screen.frame
+        }
+        let bounds = CGDisplayBounds(displayID)
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? bounds.maxY
+        return NSRect(x: bounds.minX, y: primaryHeight - bounds.maxY,
+                      width: bounds.width, height: bounds.height)
     }
 }
 
