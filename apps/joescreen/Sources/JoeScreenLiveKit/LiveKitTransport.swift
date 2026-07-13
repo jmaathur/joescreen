@@ -775,8 +775,24 @@ public actor LiveKitTransport: MediaTransport {
         seedDimensions: Dimensions?,
         videoTrack: RemoteVideoTrack?
     ) {
-        guard let videoTrack else { return }
         let ownerID = identity.flatMap { participantID(forIdentity: $0) }
+
+        // Media-state fix: a camera/mic track SUBSCRIBING is the authoritative moment a participant's
+        // video/voice goes live to us. `handleParticipantConnected` seeds their state BEFORE their
+        // tracks are published (a race → seeded as off/muted), and `didUpdateIsMuted` only fires on a
+        // later TOGGLE — so without this, peers show a newcomer as camera-off / mic-muted until they
+        // toggle (the "toggle off+on to appear" bug; audio flows but the mute badge is stale). Fire the
+        // same events the toggle path uses, for BOTH audio (mic) and video (camera) — BEFORE the
+        // video-only guard below, so mic (no videoTrack) is covered too.
+        if let ownerID {
+            switch sourceKind {
+            case .microphone: applyMedia(.micLive(id: ownerID, true))
+            case .camera:     applyMedia(.cameraOn(id: ownerID, true))
+            default:          break
+            }
+        }
+
+        guard let videoTrack else { return }
         let descriptor = RemoteTrackDescriptor(
             trackSID: trackSID, trackName: trackName, sourceKind: sourceKind, ownerID: ownerID)
 
