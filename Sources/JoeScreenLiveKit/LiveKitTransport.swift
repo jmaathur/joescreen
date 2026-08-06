@@ -54,9 +54,13 @@ public actor LiveKitTransport: MediaTransport {
 
     /// Remote video tracks by track name (for receiver-side rendering hooks, M2 test + M4 UI).
     private var remoteVideoTracks: [String: RemoteVideoTrack] = [:]
-    /// Optional renderer factory: given a track name + track, produce/attach a renderer. Set by the
-    /// app (M4) or a test (M2) to observe received frames. Nil = no rendering side effects.
-    private var onTrackSubscribed: (@Sendable (String, RemoteVideoTrack) -> Void)?
+    /// Publishing participant's LiveKit identity per subscribed track name, so the
+    /// track-subscribed hook can attribute a share to its owner (share-state-sync fix).
+    private var remoteTrackIdentities: [String: String] = [:]
+    /// Optional renderer factory: given a track name + publisher identity + track, produce/attach
+    /// a renderer. Set by the app (M4) or a test (M2) to observe received frames. Nil = no
+    /// rendering side effects.
+    private var onTrackSubscribed: (@Sendable (String, String?, RemoteVideoTrack) -> Void)?
 
     /// Optional hook fired whenever the participant set changes (someone connects/disconnects, or a
     /// (re)connection re-seeds the roster). Carries the CURRENT full set of participant IDs (remote +
@@ -75,11 +79,13 @@ public actor LiveKitTransport: MediaTransport {
     }
 
     /// Install a hook invoked whenever a remote video track is subscribed (M2 test observes frames;
-    /// M4 app attaches a SwiftUIVideoView / renderer). Idempotent; last writer wins.
-    public func setOnTrackSubscribed(_ handler: @escaping @Sendable (String, RemoteVideoTrack) -> Void) {
+    /// M4 app attaches a SwiftUIVideoView / renderer). The handler receives the track name, the
+    /// PUBLISHING participant's LiveKit identity (nil if unknown), and the track. Idempotent; last
+    /// writer wins.
+    public func setOnTrackSubscribed(_ handler: @escaping @Sendable (String, String?, RemoteVideoTrack) -> Void) {
         self.onTrackSubscribed = handler
         // Fire for any already-subscribed tracks so a late observer doesn't miss them.
-        for (name, track) in remoteVideoTracks { handler(name, track) }
+        for (name, track) in remoteVideoTracks { handler(name, remoteTrackIdentities[name], track) }
     }
 
     /// Install a hook fired whenever the participant set changes. Fires ONCE immediately with the
@@ -146,6 +152,7 @@ public actor LiveKitTransport: MediaTransport {
         publishedTracks.removeAll()
         cameraPublication = nil
         remoteVideoTracks.removeAll()
+        remoteTrackIdentities.removeAll()
         if let observer { room.remove(delegate: observer) }
         observer = nil
         updateState(.disconnected)
@@ -394,11 +401,13 @@ public actor LiveKitTransport: MediaTransport {
     func handleTrackSubscribed(identity: String?, trackName: String, videoTrack: RemoteVideoTrack?) {
         guard let videoTrack else { return }
         remoteVideoTracks[trackName] = videoTrack
-        onTrackSubscribed?(trackName, videoTrack)
+        remoteTrackIdentities[trackName] = identity
+        onTrackSubscribed?(trackName, identity, videoTrack)
     }
 
     func handleTrackUnsubscribed(trackName: String) {
         remoteVideoTracks[trackName] = nil
+        remoteTrackIdentities[trackName] = nil
     }
 
     func handleData(_ data: Data, topic: String) {

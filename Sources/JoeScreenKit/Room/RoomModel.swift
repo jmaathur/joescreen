@@ -9,13 +9,13 @@ import Foundation
 /// `InputAuthorizer` remain the injection-time source of truth. A peer lying in its mirrored
 /// RoomModel gains nothing.
 ///
-/// Sync model: the host mutates its copy and broadcasts snapshots over the control plane
-/// (via `SignalingSendQueue`, D9); `revision` is a monotonic last-writer-wins stamp so receivers
-/// (including late joiners catching up through GroupSessionJournal) apply only newer snapshots
-/// and stale/reordered ones are dropped. Every state-changing mutation below bumps `revision`
-/// exactly once; no-op mutations don't, so revision changes always mean visible state changes.
-///
-/// // TODO(Phase1): host-side broadcaster + receiver-side `apply(snapshot:)` gated on revision.
+/// Sync model: each participant mutates its copy and broadcasts snapshots over the control plane
+/// (D9); discrete share/unshare changes also go out as ordered ShareEvents on the same channel.
+/// Receivers UNION-MERGE snapshot shares per windowID (see `merge(snapshot:excludingOwner:)`) —
+/// per-process revision counters start at 0 on every peer, so a last-writer-wins revision gate
+/// collides across concurrent sharers and silently drops foreign shares. `revision` still stamps
+/// outgoing snapshots/ShareEvents for ordering diagnostics; every state-changing mutation below
+/// bumps it exactly once, so revision changes always mean visible state changes.
 public struct RoomModel: Codable, Sendable, Equatable {
 
     /// Whether a share's video is flowing or intentionally frozen (owner minimized/occluded the
@@ -151,6 +151,33 @@ public struct RoomModel: Codable, Sendable, Equatable {
             }
         }
 
+        if changed { bump() }
+        return changed
+    }
+
+    /// Union-merge a foreign snapshot into this copy (receiver side of the D9 sync). Every share
+    /// the snapshot knows that we don't is added; shares we already know are KEPT even when absent
+    /// from the snapshot — unshares travel as ordered ShareEvents on the same channel, never via
+    /// snapshots, so a stale/reordered snapshot can't resurrect or drop a share. Pause states for
+    /// shares both sides know adopt the snapshot's value so pause updates keep flowing. Entries
+    /// owned by `excludingOwner` (the local participant) are skipped entirely: that participant is
+    /// the authoritative source for its own shares, so a stale foreign mirror can never resurrect
+    /// a share it just ended or stomp its pause state. Replaces the old last-writer-wins
+    /// whole-model replace, whose per-process revision counters collided across peers and silently
+    /// dropped foreign shares. Bumps `revision` once iff anything changed.
+    @discardableResult
+    public mutating func merge(snapshot other: RoomModel, excludingOwner: ParticipantID? = nil) -> Bool {
+        var changed = false
+        for (window, owner) in other.shares where owner != excludingOwner {
+            if shares[window] == nil {
+                shares[window] = owner
+                pauseStates[window] = other.pauseStates[window] ?? .live
+                changed = true
+            } else if let state = other.pauseStates[window], pauseStates[window] != state {
+                pauseStates[window] = state
+                changed = true
+            }
+        }
         if changed { bump() }
         return changed
     }
