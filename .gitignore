@@ -18,6 +18,7 @@ Apps/iOS/Resources/Info-iOS.plist
 *.xcodeproj/project.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 .env
+.env.*
 TEAM_ID.local
 
 # harness internal

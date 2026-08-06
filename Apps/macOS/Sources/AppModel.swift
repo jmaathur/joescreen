@@ -31,7 +31,8 @@ public final class AppModel {
     public private(set) var joinParameters: DirectJoinParameters?
     public private(set) var localParticipantID: ParticipantID?
     /// The mirrored room state. On the sharer this is the authoritative copy it broadcasts; on a
-    /// joiner it's the last snapshot applied from the `state` channel (last-writer-wins on revision).
+    /// joiner it's the union of every snapshot merged in from the `state` channel plus ShareEvents
+    /// (per-windowID union — revision counters are per-process and collide across peers).
     public private(set) var room = RoomModel()
     public private(set) var participants: Set<ParticipantID> = []
     public private(set) var mediaState: MediaConnectionState = .disconnected
@@ -139,9 +140,13 @@ public final class AppModel {
         #endif
 
         // Install the remote-track hook BEFORE connecting so we don't miss early subscriptions.
-        await transport.setOnTrackSubscribed { [weak self] trackName, track in
+        // The publisher's LiveKit identity rides along so the owner can be derived from the
+        // transport's identity map instead of a phantom UUID (share-state-sync fix).
+        await transport.setOnTrackSubscribed { [weak self] trackName, publisherIdentity, track in
             guard let windowID = LiveKitTransport.windowID(fromTrackName: trackName) else { return }
-            Task { @MainActor in self?.addRemoteWindow(windowID: windowID, track: track) }
+            Task { @MainActor in
+                await self?.addRemoteWindow(windowID: windowID, publisherIdentity: publisherIdentity, track: track)
+            }
         }
 
         // Mirror hook: when a track unsubscribes (unshare, disconnect, subscription drop), close
@@ -255,8 +260,15 @@ public final class AppModel {
     /// Record the authoritative connected-participant set from the transport and recompute the roster.
     /// This is the LIVE membership source (local + all connected remotes), so disconnects actually
     /// remove people — unlike the additive snapshot path.
+    ///
+    /// Late-joiner resync: when the set GREW (a new participant appeared) and we have shares worth
+    /// advertising, rebroadcast our snapshot so the joiner learns every existing share. Previously
+    /// nothing re-broadcast on join, so a late joiner got the video track (its window opened) but
+    /// never the share list. The joiner itself has an empty room and stays silent, and each
+    /// existing member rebroadcasts at most once per join, so this can't storm.
     private func applyParticipantSet(_ ids: Set<ParticipantID>) {
         let departed = transportParticipants.subtracting(ids)
+        let newMemberAppeared = !ids.subtracting(transportParticipants).isEmpty
         transportParticipants = ids
         // Close any remote window whose owner just left: its tracks are dead, so the window would
         // otherwise linger as a frozen bordered rectangle. Attribute ownership ONLY through the
@@ -271,6 +283,7 @@ public final class AppModel {
             for windowID in orphaned { removeRemoteWindowIfForeign(windowID) }
         }
         recomputeRoster()
+        if newMemberAppeared && !room.shares.isEmpty { broadcastState() }
     }
 
     /// The displayed roster = live transport members ∪ current share owners ∪ me. Share owners are
@@ -301,8 +314,8 @@ public final class AppModel {
         })
     }
 
-    /// Apply an inbound `state`-channel payload: a RoomSnapshot (full state, revision-gated) or a
-    /// ShareEvent (open/close a viewer window promptly).
+    /// Apply an inbound `state`-channel payload: a RoomSnapshot (full state, union-merged) or a
+    /// ShareEvent (add/remove a single share + open/close its viewer window promptly).
     private func applyStatePayload(_ data: Data) {
         guard let envelope = try? WireCodec.decode(data), let kind = envelope.kind else {
             return // unknown/unreadable — skip, never crash
@@ -310,42 +323,63 @@ public final class AppModel {
         switch kind {
         case .roomSnapshot:
             guard let snap = try? WireCodec.unpack(envelope, as: RoomSnapshot.self) else { return }
-            // Last-writer-wins: only apply a strictly newer snapshot.
-            if snap.model.revision > room.revision || room.revision == 0 {
-                applyRoom(snap.model)
-            }
+            applyRoom(snap.model)
         case .shareEvent:
             guard let ev = try? WireCodec.unpack(envelope, as: ShareEvent.self) else { return }
-            if ev.action == .unshared { removeRemoteWindowIfForeign(ev.windowID) }
-            // `shared` is handled when the track subscribes; the snapshot carries authoritative state.
+            applyShareEvent(ev)
         default:
             break
         }
     }
 
-    /// Replace the mirrored room with `newRoom`, opening/closing viewer windows to match. Only a
-    /// JOINER applies foreign snapshots; the local sharer's own windows are driven by its capture.
-    private func applyRoom(_ newRoom: RoomModel) {
-        room = newRoom
-        // Recompute the roster (live transport members ∪ this snapshot's share owners ∪ me).
-        recomputeRoster()
-        // Close any remote viewer window whose share disappeared.
-        for windowID in remoteWindows.keys where newRoom.owner(of: windowID) == nil {
-            removeRemoteWindowIfForeign(windowID)
+    /// Apply a remote share/unshare event to the mirrored room. Events about windows WE are
+    /// capturing locally are ignored — our own shares are local-authoritative, so a replayed or
+    /// stale event must never re-own or end a live local share.
+    private func applyShareEvent(_ ev: ShareEvent) {
+        guard localCaptures[ev.windowID] == nil else { return }
+        switch ev.action {
+        case .shared:
+            // The track subscription opens the viewer window; the event carries the authoritative
+            // owner, so record the share here — previously `.shared` was ignored and the share
+            // list only filled in via (revision-gated, droppable) snapshots.
+            if room.addShare(ev.windowID, owner: ev.ownerID) { recomputeRoster() }
+        case .unshared:
+            room.removeShare(ev.windowID)
+            removeRemoteWindowIfForeign(ev.windowID)
+            recomputeRoster()
         }
+    }
+
+    /// Merge a foreign snapshot into the mirrored room. Shares union per windowID (a share present
+    /// on either side survives; unshares arrive as ordered ShareEvents), so two peers' per-process
+    /// revision counters can no longer collide and silently drop foreign shares. The local
+    /// participant's own shares are excluded from the merge — they are local-authoritative.
+    private func applyRoom(_ newRoom: RoomModel) {
+        room.merge(snapshot: newRoom, excludingOwner: localParticipantID)
+        // Recompute the roster (live transport members ∪ merged share owners ∪ me).
+        recomputeRoster()
     }
 
     // MARK: - Remote windows
 
-    private func addRemoteWindow(windowID: WindowID, track: JoeScreenLiveKit.RemoteVideoTrackRef) {
+    private func addRemoteWindow(windowID: WindowID, publisherIdentity: String?, track: JoeScreenLiveKit.RemoteVideoTrackRef) async {
         AppLog.info("remote track subscribed → opening native window for \(windowID)")
-        let owner = room.owner(of: windowID) ?? windowID // fallback owner id for coloring
-        let win = RemoteVideoWindow(windowID: windowID, ownerID: owner, track: track)
+        // Owner resolution: the mirrored room first, then the PUBLISHING participant's LiveKit
+        // identity via the transport's identity map (a track subscription usually beats the
+        // snapshot/ShareEvent). NEVER mint a phantom ParticipantID — the old `?? windowID`
+        // fallback injected one into the roster via transportParticipants.
+        var owner = room.owner(of: windowID)
+        if owner == nil, let publisherIdentity {
+            owner = await transport.participantID(forIdentity: publisherIdentity)
+        }
+        // Reconcile list ↔ windows: if room state doesn't know this share yet, record it now so
+        // the share list and the open window agree even before the snapshot/ShareEvent lands.
+        if let owner, room.owner(of: windowID) == nil {
+            room.addShare(windowID, owner: owner)
+            recomputeRoster()
+        }
+        let win = RemoteVideoWindow(windowID: windowID, ownerID: owner ?? windowID, track: track)
         remoteWindows[windowID] = win
-        // The track owner is definitely present; ensure they're in the roster even if the
-        // participant-changed hook and this subscription race.
-        transportParticipants.insert(owner)
-        recomputeRoster()
         windowManager.open(win)
     }
 

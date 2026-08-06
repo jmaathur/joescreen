@@ -171,10 +171,11 @@ public struct DrawUndo: WireMessage {
 
 // MARK: - Coordination state (reliable / ordered) — M0
 
-/// A full mirrored `RoomModel` snapshot broadcast by the sharer over the `state` channel. Receivers
-/// apply it only if `model.revision` is newer than their current copy (last-writer-wins), so
-/// reordered/stale snapshots are dropped. This is the durable, self-contained state message a late
-/// joiner needs to catch up in one shot (spec §M0 / D9 / RoomModel sync model).
+/// A full mirrored `RoomModel` snapshot broadcast by a participant over the `state` channel.
+/// Receivers UNION-MERGE its shares into their copy (per-process revisions collide across peers,
+/// so last-writer-wins dropped foreign shares); unshares arrive as ordered ShareEvents. This is
+/// the durable, self-contained state message a late joiner needs to catch up in one shot
+/// (spec §M0 / D9 / RoomModel sync model).
 public struct RoomSnapshot: WireMessage {
     public static let kind: MessageKind = .roomSnapshot
     public var model: RoomModel

@@ -57,7 +57,7 @@ final class TrackSubscriptionRecoveryTests: XCTestCase {
 
         // B installs the receive hook, then joins late.
         let received = FrameCountBox()
-        await transportB.setOnTrackSubscribed { name, track in
+        await transportB.setOnTrackSubscribed { name, _, track in
             let renderer = CountingRenderer(box: received, trackName: name)
             track.add(videoRenderer: renderer)
             received.retain(renderer) // keep it alive for the test duration

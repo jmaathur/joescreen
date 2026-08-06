@@ -51,7 +51,7 @@ public final class ViewerModel {
         catch { phase = .failed("token: \(error)"); return }
         #endif
 
-        await transport.setOnTrackSubscribed { [weak self] trackName, track in
+        await transport.setOnTrackSubscribed { [weak self] trackName, _, track in
             guard let windowID = LiveKitTransport.windowID(fromTrackName: trackName) else { return }
             Task { @MainActor in self?.addRemoteTrack(windowID: windowID, track: track) }
         }
