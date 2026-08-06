@@ -50,5 +50,14 @@ struct JoeScreenApp: App {
         }
         // A single main window; remote shared windows are separate NSWindows (M4).
         .windowResizability(.contentSize)
+        .commands {
+            CommandMenu("Call") {
+                Button(model.micEnabled ? "Mute Microphone" : "Unmute Microphone") {
+                    model.toggleMic()
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(model.phase != .inCall)
+            }
+        }
     }
 }
