@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Observation
 import JoeScreenKit
 import JoeScreenLiveKit
@@ -77,12 +78,31 @@ public final class AppModel {
     /// Optional CGWindowID to auto-share after joining (the --share-window-id automation path).
     private var autoShareWindowID: UInt32?
     private var pumps: [Task<Void, Never>] = []
+    /// Token for the passive global ⌘⇧M key monitor. Retained so the monitor (and the ability to
+    /// remove it) lives as long as the model.
+    private var globalMicHotkeyMonitor: Any?
 
     public init(launchJoin: DirectJoinParameters? = nil, autoShareWindowID: UInt32? = nil) {
         self.launchJoin = launchJoin
         self.autoShareWindowID = autoShareWindowID
         if launchJoin != nil { self.showJoinSheet = false }
         windowManager.model = self
+        installGlobalMicHotkey()
+    }
+
+    /// Install a passive global ⌘⇧M monitor so the mic can be toggled while the app isn't focused.
+    /// The monitor only observes the event (the focused app still receives it). macOS may withhold
+    /// global key events without Input Monitoring permission, so the in-app Call-menu shortcut
+    /// (same keystroke) remains the guaranteed path.
+    private func installGlobalMicHotkey() {
+        globalMicHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.modifierFlags.contains(.command), event.modifierFlags.contains(.shift),
+                  event.charactersIgnoringModifiers?.lowercased() == "m" else { return }
+            Task { @MainActor in
+                guard let self, self.phase == .inCall else { return }
+                self.toggleMic()
+            }
+        }
     }
 
     // MARK: - Join entry points
