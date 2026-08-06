@@ -40,6 +40,15 @@ public final class AppModel {
     /// The RemoteWindowManager opens/closes native NSWindows to match this set.
     public private(set) var remoteWindows: [WindowID: RemoteVideoWindow] = [:]
 
+    // MARK: - Shared transcript (live speech-to-text + recording notes)
+
+    /// The merged shared transcript: every participant's segments (deduped by segmentID, final over
+    /// partial) plus the recording-note boundary events, all applied idempotently. Pure projection
+    /// source for the transcript pane.
+    public private(set) var transcript = TranscriptModel()
+    /// Whether the transcript/notes pane is visible in the session view.
+    public var showTranscriptPane: Bool = false
+
     // MARK: - Local media controls (mic + webcam)
 
     /// Whether the local microphone is currently publishing. Drives the mic toggle in the control bar.
@@ -71,6 +80,10 @@ public final class AppModel {
     private let windowManager = RemoteWindowManager()
     private var stateChannel: (any WireDataChannel)?
     private var cursorPump: CursorPump?
+    private var transcriptChannel: (any WireDataChannel)?
+    /// Local mic → shared transcript (Apple Speech on its own audio engine). Observable; the UI
+    /// reads `state` directly to render the transcribe toggle + soft-failure reason.
+    public let transcriptionService = TranscriptionService()
 
     private var launchJoin: DirectJoinParameters?
     private var launchJoinFired = false
@@ -143,6 +156,9 @@ public final class AppModel {
             let state = try await transport.openDataChannel(.state)
             self.stateChannel = state
             startStatePump(state)
+            let transcript = try await transport.openDataChannel(.transcript)
+            self.transcriptChannel = transcript
+            startTranscriptPump(transcript)
             // Enable the mic on join (M5).
             try? await transport.setMicrophone(enabled: true)
             micEnabled = await transport.isMicrophoneEnabled()
@@ -201,6 +217,9 @@ public final class AppModel {
         mediaState = .disconnected
         stateChannel = nil
         cursorPump = nil
+        transcriptionService.stop()
+        transcript = TranscriptModel()
+        transcriptChannel = nil
         showJoinSheet = true
     }
 
@@ -521,6 +540,86 @@ public final class AppModel {
         guard let env = try? WireCodec.pack(ev, sender: owner),
               let bytes = try? WireCodec.encode(env) else { return }
         Task { try? await channel.send(bytes) }
+    }
+
+    // MARK: - Shared transcript (live speech-to-text + recording notes)
+
+    private func startTranscriptPump(_ channel: any WireDataChannel) {
+        let incoming = channel.incoming()
+        pumps.append(Task { @MainActor [weak self] in
+            for await data in incoming {
+                self?.applyTranscriptPayload(data)
+            }
+        })
+    }
+
+    /// Apply an inbound `transcript`-channel payload: a TranscriptSegment (merged by segmentID,
+    /// final over partial) or a RecordingNoteEvent (note boundary, idempotent last-writer-wins).
+    private func applyTranscriptPayload(_ data: Data) {
+        guard let envelope = try? WireCodec.decode(data), let kind = envelope.kind else {
+            return // unknown/unreadable — skip, never crash
+        }
+        switch kind {
+        case .transcriptSegment:
+            guard let seg = try? WireCodec.unpack(envelope, as: TranscriptSegment.self) else { return }
+            transcript.apply(seg)
+        case .recordingNote:
+            guard let ev = try? WireCodec.unpack(envelope, as: RecordingNoteEvent.self) else { return }
+            transcript.apply(ev)
+        default:
+            break
+        }
+    }
+
+    /// Publish a transcript-channel payload (segments and note events share one send path).
+    private func broadcastTranscript<M: WireMessage>(_ payload: M) {
+        guard let me = localParticipantID, let channel = transcriptChannel else { return }
+        guard let env = try? WireCodec.pack(payload, sender: me),
+              let bytes = try? WireCodec.encode(env) else { return }
+        Task { try? await channel.send(bytes) }
+    }
+
+    /// Toggle local mic transcription. Opt-in; when off (or denied — the service fails soft) the
+    /// local user just doesn't contribute segments while everyone else's still render.
+    public func toggleTranscription() {
+        if transcriptionService.state == .off {
+            startTranscription()
+        } else {
+            transcriptionService.stop()
+        }
+    }
+
+    private func startTranscription() {
+        guard let me = localParticipantID else { return }
+        // A fresh note starts automatically when transcription begins (unless one is already open).
+        if transcript.currentNote == nil { startNewNote() }
+        transcriptionService.onSegment = { [weak self] segmentID, text, startTime, isFinal in
+            guard let self, let noteID = self.transcript.currentNote?.noteID else { return }
+            let seg = TranscriptSegment(segmentID: segmentID, noteID: noteID, speakerID: me,
+                                        text: text, startTime: startTime, isFinal: isFinal)
+            self.transcript.apply(seg)
+            self.broadcastTranscript(seg)
+        }
+        transcriptionService.start()
+    }
+
+    /// Finalize the current recording note and open a fresh one. ANY participant can do this; the
+    /// boundary events broadcast, so every client converges on the same notes list.
+    public func stopAndStartNewNote() {
+        let now = Date().timeIntervalSince1970
+        if let current = transcript.currentNote {
+            let stop = RecordingNoteEvent(noteID: current.noteID, action: .stop,
+                                          startedAt: current.startedAt, endedAt: now)
+            transcript.apply(stop)
+            broadcastTranscript(stop)
+        }
+        startNewNote(at: now)
+    }
+
+    private func startNewNote(at now: TimeInterval = Date().timeIntervalSince1970) {
+        let ev = RecordingNoteEvent(noteID: UUID(), action: .start, startedAt: now)
+        transcript.apply(ev)
+        broadcastTranscript(ev)
     }
 
     // MARK: - Roster helpers

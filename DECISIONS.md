@@ -189,6 +189,23 @@ SwiftTerm-rendered views on all peers (iOS is a full terminal client — text, n
 redaction (regex + Shannon-entropy) is applied BEFORE transmit in `SecretRedactor` (implemented +
 unit-tested), documented as best-effort and **never a security boundary.**
 
+## D15 — Speech-to-text: per-participant LOCAL transcription over a `transcript` data channel
+Each participant transcribes THEIR OWN mic locally with Apple's Speech framework
+(`SFSpeechRecognizer` + `SFSpeechAudioBufferRecognitionRequest` fed by a dedicated `AVAudioEngine`
+input tap — a SEPARATE engine from LiveKit's mic capture, voice processing OFF since LiveKit owns
+AEC) and publishes `TranscriptSegment`s to everyone over a NEW reliable/ordered `transcript` data
+channel (`MessageKind` tags 13/14, append-only per the wire rule; old clients skip them via the
+Envelope unknown-kind tolerance). Every client merges segments by `segmentID` (final overwrites
+partial) into one shared transcript attributed by speaker. Recording-note boundaries are shared
+start/stop `RecordingNoteEvent`s applied idempotently (last-writer-wins by event time), so ANY
+participant can stop the current note and start a new one and everyone converges on the same notes
+list. On-device recognition when `supportsOnDeviceRecognition`, server-based otherwise; speech
+auth denial or recognizer unavailability fails SOFT (that user just doesn't contribute segments).
+**Why local-per-participant:** no central transcriber to deploy/scale, speaker attribution is free
+(speaker = publisher), and no audio leaves the device beyond the already-encrypted call audio —
+only text hits the data channel. **Live-only sync:** pre-join transcript history is NOT replayed to
+late joiners (a history snapshot is a future addition if needed). iOS out of scope.
+
 ---
 
 ### Derived per-codec QP bounds (D5)

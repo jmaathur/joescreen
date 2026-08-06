@@ -12,7 +12,7 @@ import JoeScreenKit
 ///     disconnect, and bridge the delegate's connection-state stream.
 ///   • Video: one buffer track per shared window, named `window:<uuid>` so receivers map track→window;
 ///     the frame-before-publish handshake (≥1 frame captured before `publish`) is honored via the sink.
-///   • Data: six topic-mapped channels (iterate `DataChannel.allCases`), reliability from ChannelPolicy,
+///   • Data: topic-mapped channels (iterate `DataChannel.allCases`), reliability from ChannelPolicy,
 ///     Chunker for >14 KB reliable payloads.
 ///   • Identity: bind a ParticipantID to a transport identity string; parse remote identities back.
 /// A remote video track reference the app layer can hand to `SwiftUIVideoView(track)` for rendering,
@@ -228,7 +228,7 @@ public actor LiveKitTransport: MediaTransport {
         return ch
     }
 
-    /// Open ALL six channels eagerly (iterate allCases — do not hardcode five). The app/test calls
+    /// Open ALL channels eagerly (iterate allCases — never hardcode a count). The app/test calls
     /// this once after connect so inbound demux has a home for every topic.
     public func openAllDataChannels() async throws {
         for channel in DataChannel.allCases {

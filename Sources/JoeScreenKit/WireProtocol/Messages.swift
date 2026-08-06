@@ -201,3 +201,52 @@ public struct ShareEvent: WireMessage {
         self.ownerID = ownerID; self.revision = revision
     }
 }
+
+// MARK: - Transcript (reliable / ordered) — shared live speech-to-text
+
+/// One recognized speech segment from a single participant's mic. Each participant transcribes
+/// THEIR OWN audio locally and publishes segments to everyone; receivers merge by `segmentID`
+/// (a final segment overwrites its partial updates; a partial never overwrites a final).
+public struct TranscriptSegment: WireMessage {
+    public static let kind: MessageKind = .transcriptSegment
+    /// Stable ID of this utterance: partial updates and the final for one utterance share it.
+    public var segmentID: UUID
+    /// The recording note this segment belongs to (note boundaries are shared events).
+    public var noteID: UUID
+    /// Who spoke (the participant whose mic produced this segment).
+    public var speakerID: ParticipantID
+    public var text: String
+    /// Sender wall clock (unix seconds) when recognition of this utterance started.
+    public var startTime: TimeInterval
+    /// `false` = in-flight partial (dimmed in UI, replaced by later updates); `true` = finalized.
+    public var isFinal: Bool
+    public init(segmentID: UUID, noteID: UUID, speakerID: ParticipantID, text: String,
+                startTime: TimeInterval, isFinal: Bool) {
+        self.segmentID = segmentID; self.noteID = noteID; self.speakerID = speakerID
+        self.text = text; self.startTime = startTime; self.isFinal = isFinal
+    }
+}
+
+/// A recording-note boundary event. Any participant can stop the current note (finalizing it) and
+/// start a fresh one; the events are broadcast so every client sees the same notes list. Applied
+/// idempotently, last-writer-wins by event time (`endedAt ?? startedAt`).
+public struct RecordingNoteEvent: WireMessage {
+    public static let kind: MessageKind = .recordingNote
+    public enum Action: String, Codable, Sendable, Equatable {
+        case start  // a new note opened
+        case stop   // the note was finalized
+    }
+    public var noteID: UUID
+    public var action: Action
+    /// Wall clock (unix seconds) when the note started.
+    public var startedAt: TimeInterval
+    /// Wall clock (unix seconds) when the note was stopped; `nil` while open.
+    public var endedAt: TimeInterval?
+    /// Display title; may be empty (the model auto-titles from the first words or the timestamp).
+    public var title: String
+    public init(noteID: UUID, action: Action, startedAt: TimeInterval,
+                endedAt: TimeInterval? = nil, title: String = "") {
+        self.noteID = noteID; self.action = action; self.startedAt = startedAt
+        self.endedAt = endedAt; self.title = title
+    }
+}

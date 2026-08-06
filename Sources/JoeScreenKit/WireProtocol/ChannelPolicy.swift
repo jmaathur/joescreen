@@ -13,6 +13,10 @@ public enum DataChannel: String, Codable, Sendable, CaseIterable {
     /// `input` it carries no monotonic sequence — ordering + last-writer-wins on `RoomModel.revision`
     /// resolve staleness, so `requiresSequence == false`.
     case state
+    /// Shared live transcript: per-participant speech segments + recording-note boundary events.
+    /// Like `state` it carries no monotonic sequence — segments dedupe/merge by `segmentID` (final
+    /// overwrites partial) and note events resolve last-writer-wins by event time.
+    case transcript
 }
 
 /// Whether a channel guarantees delivery.
@@ -53,6 +57,8 @@ public struct ChannelPolicy: Sendable, Equatable {
         case .draw:      return ChannelPolicy(channel: .draw,      reliability: .reliable,   ordering: .orderedPerAuthor)
         // Coordination state: reliable + ordered; staleness resolved by RoomModel.revision, no seq.
         case .state:     return ChannelPolicy(channel: .state,     reliability: .reliable,   ordering: .ordered)
+        // Transcript: reliable + ordered; dedupe by segmentID + note-event LWW, no seq.
+        case .transcript: return ChannelPolicy(channel: .transcript, reliability: .reliable, ordering: .ordered)
         }
     }
 

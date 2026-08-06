@@ -17,6 +17,11 @@ struct SessionView: View {
                 Divider()
                 SharesPane()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if model.showTranscriptPane {
+                    Divider()
+                    TranscriptPane()
+                        .frame(width: 300)
+                }
             }
             Divider()
             // Bottom control bar: mic + camera split-buttons and Leave (CoScreen-style layout).
