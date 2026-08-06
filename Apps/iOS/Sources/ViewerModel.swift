@@ -44,7 +44,7 @@ public final class ViewerModel {
 
     private func connect(_ params: DirectJoinParameters) async {
         #if DEBUG
-        let token = DevTokenMinter.mint(identity: params.identity, room: params.room)
+        let token = DevTokenMinter.mint(identity: params.identity, room: params.room, name: params.name)
         #else
         let token: String
         do { token = try await TokenClient.fetch(server: params.serverURL, room: params.room, identity: params.identity) }
@@ -59,6 +59,8 @@ public final class ViewerModel {
 
         do {
             try await transport.connect(.init(serverURL: params.serverURL, authToken: token))
+            // Publish our display name so macOS peers render it in their roster/share labels.
+            await transport.publishDisplayName(params.name)
             try await transport.openAllDataChannels()
             let state = try await transport.openDataChannel(.state)
             stateChannel = state

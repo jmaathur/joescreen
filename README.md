@@ -45,9 +45,11 @@ xcodebuild -project Apps/JoeScreen.xcodeproj -scheme JoeScreen-macOS -derivedDat
 
 # 3. Launch TWO instances (open -n is REQUIRED to spawn a second, not focus the first).
 #    Each gets a fresh identity — LiveKit evicts duplicate-identity holders.
+#    `--name` sets the label the other instance sees (roster / share tiles / window titles);
+#    omit it to default to your OS user name.
 APP=build/Build/Products/Debug/JoeScreen.app
-open -n "$APP" --args --join-url ws://localhost:7880 --room demo --identity "$(uuidgen)"
-open -n "$APP" --args --join-url ws://localhost:7880 --room demo --identity "$(uuidgen)"
+open -n "$APP" --args --join-url ws://localhost:7880 --room demo --identity "$(uuidgen)" --name Alice
+open -n "$APP" --args --join-url ws://localhost:7880 --room demo --identity "$(uuidgen)" --name Bob
 
 # 4. Instance A: Share → pick a window (grant Screen Recording once).  B: watch it live in a native
 #    window. (Or bypass the picker: add `--share-window-id <CGWindowID>` to A's launch args.)

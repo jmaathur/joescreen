@@ -75,6 +75,11 @@ public actor LiveKitTransport: MediaTransport {
     /// local). The app drives its roster from this so peers appear even before they share anything.
     private var onParticipantsChanged: (@Sendable (Set<ParticipantID>) -> Void)?
 
+    /// Optional hook fired whenever participant DISPLAY NAMES change (join, leave, reconnect, or a
+    /// name/metadata update). Carries the CURRENT full ParticipantID → display-name map (local +
+    /// remotes that have a name). The app drives roster/share/window labels from this.
+    private var onParticipantNamesChanged: (@Sendable ([ParticipantID: String]) -> Void)?
+
     /// Codec selection feeding VideoPublishOptions (D5). One selector describes the current share
     /// context; the app updates window count on share/unshare.
     private var codecSelector = CodecSelector(windowCount: 1)
@@ -125,6 +130,57 @@ public actor LiveKitTransport: MediaTransport {
             }
         }
         return ids
+    }
+
+    /// Install a hook fired whenever participant display names change. Fires ONCE immediately with
+    /// the current map so a late observer is seeded, then on every name/metadata update, join,
+    /// leave, and (re)connect. Idempotent; last writer wins.
+    public func setOnParticipantNamesChanged(_ handler: @escaping @Sendable ([ParticipantID: String]) -> Void) {
+        self.onParticipantNamesChanged = handler
+        handler(currentParticipantNames())
+    }
+
+    /// The current ParticipantID → display-name map: the local participant plus every connected
+    /// remote that exposes a name. Prefers the LiveKit `name` field; falls back to `metadata`
+    /// (we publish the raw name string as both). Participants with neither are simply absent —
+    /// callers fall back to the identity-prefix label for them (back-compat with older peers).
+    public func currentParticipantNames() -> [ParticipantID: String] {
+        var names: [ParticipantID: String] = [:]
+        let local = room.localParticipant
+        if let name = LiveKitTransport.displayName(name: local.name, metadata: local.metadata),
+           let identity = local.identity?.stringValue,
+           let pid = participantID(forIdentity: identity) {
+            names[pid] = name
+        }
+        for participant in room.remoteParticipants.values {
+            if let name = LiveKitTransport.displayName(name: participant.name, metadata: participant.metadata),
+               let identity = participant.identity?.stringValue,
+               let pid = participantID(forIdentity: identity) {
+                names[pid] = name
+            }
+        }
+        return names
+    }
+
+    /// Resolve a participant's display name from its LiveKit fields: `name` first, then `metadata`;
+    /// nil when both are missing/empty.
+    private static func displayName(name: String?, metadata: String?) -> String? {
+        if let name, !name.isEmpty { return name }
+        if let metadata, !metadata.isEmpty { return metadata }
+        return nil
+    }
+
+    /// Publish the local display name so peers can render it (roster, share tiles, window titles)
+    /// instead of the identity prefix. Writes BOTH the LiveKit `name` field and the raw string as
+    /// `metadata` (readers prefer `name`, older readers may look at `metadata`). Best-effort: a
+    /// token without the `canUpdateOwnMetadata` grant (e.g. the production token server today)
+    /// simply skips the update — the JWT `name` claim still covers dev builds. Call after connect.
+    public func publishDisplayName(_ name: String) async {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try? await room.localParticipant.set(name: trimmed)
+        try? await room.localParticipant.set(metadata: trimmed)
+        onParticipantNamesChanged?(currentParticipantNames())
     }
 
     /// The underlying room (for app-layer rendering that needs SwiftUIVideoView(track)).
@@ -395,6 +451,7 @@ public actor LiveKitTransport: MediaTransport {
         if state == .connected {
             onParticipantsChanged?(currentParticipantIDs())
             resyncRemoteVideoTracks()
+            onParticipantNamesChanged?(currentParticipantNames())
         }
     }
 
@@ -405,6 +462,7 @@ public actor LiveKitTransport: MediaTransport {
         }
         onParticipantsChanged?(currentParticipantIDs())
         resyncRemoteVideoTracks()
+        onParticipantNamesChanged?(currentParticipantNames())
     }
 
     func handleParticipantDisconnected(identity: String?) {
@@ -415,6 +473,13 @@ public actor LiveKitTransport: MediaTransport {
             identityToParticipant[identity] = nil
         }
         onParticipantsChanged?(currentParticipantIDs())
+        onParticipantNamesChanged?(currentParticipantNames())
+    }
+
+    /// A participant's name or metadata changed (the observer's didUpdateName/didUpdateMetadata
+    /// delegate callbacks land here). Re-emit the full map; consumers just replace their copy.
+    func handleParticipantNamesChanged() {
+        onParticipantNamesChanged?(currentParticipantNames())
     }
 
     func handleTrackSubscribed(identity: String?, trackName: String, videoTrack: RemoteVideoTrack?) {

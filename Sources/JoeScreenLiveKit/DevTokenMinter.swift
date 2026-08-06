@@ -10,8 +10,10 @@ import CryptoKit
 /// --room demo --identity <id>`:
 ///   • header  `{"alg":"HS256","typ":"JWT"}`
 ///   • claims  `iss` = API key (`devkey`), `sub` = identity, `nbf` = now, `exp` = now + ttl,
+///             optional `name` = display name (becomes the participant's LiveKit `name`),
 ///             and a `video` grant `{room, roomJoin:true, canPublish:true, canSubscribe:true,
-///             canPublishData:true}`
+///             canPublishData:true, canUpdateOwnMetadata:true}` (the last one so the client can
+///             publish/repair its display name after connect via `LocalParticipant.set(name:)`)
 ///   • HMAC-SHA256 with the secret (`secret`); base64url WITHOUT padding on all three segments.
 ///
 /// A rejected token fails M2/M4 with only an opaque auth error, so the claim shape here is exact.
@@ -23,11 +25,15 @@ public enum DevTokenMinter {
 
     /// Mint a dev JWT admitting `identity` into `room`.
     /// - Parameters:
+    ///   - name: optional display name, embedded as the JWT `name` claim so every peer sees it from
+    ///     the moment this participant joins (no post-connect round-trip needed). Nil/empty omits
+    ///     the claim (back-compat with older call sites and peers).
     ///   - now: token issue time (nbf); `exp = now + ttl`. Injectable for deterministic tests.
     ///   - ttl: validity window in seconds (default 6h — comfortably longer than a demo session).
     public static func mint(
         identity: String,
         room: String,
+        name: String? = nil,
         apiKey: String = devAPIKey,
         apiSecret: String = devAPISecret,
         now: Date = Date(),
@@ -37,20 +43,27 @@ public enum DevTokenMinter {
         let nbf = Int(now.timeIntervalSince1970)
         let exp = Int(now.addingTimeInterval(ttl).timeIntervalSince1970)
         // The LiveKit `video` grant. Booleans must serialize as JSON true/false (not 1/0).
+        // `canUpdateOwnMetadata` lets the client publish its display name after connect
+        // (`LocalParticipant.set(name:)` / `set(metadata:)`), which is the production-path name
+        // channel (the token server doesn't embed names today).
         let videoGrant: [String: Any] = [
             "room": room,
             "roomJoin": true,
             "canPublish": true,
             "canSubscribe": true,
             "canPublishData": true,
+            "canUpdateOwnMetadata": true,
         ]
-        let claims: [String: Any] = [
+        var claims: [String: Any] = [
             "iss": apiKey,
             "sub": identity,
             "nbf": nbf,
             "exp": exp,
             "video": videoGrant,
         ]
+        if let name, !name.isEmpty {
+            claims["name"] = name
+        }
 
         let headerSegment = base64URLEncode(jsonData(header))
         let claimsSegment = base64URLEncode(jsonData(claims))
