@@ -14,7 +14,7 @@ import JoeScreenCaptureMac   // CVPixelBufferBox / CMSampleBufferBox
 ///   LIVEKIT_URL=ws://localhost:7880 swift test --filter JoeScreenLiveKitTests
 ///
 /// Proves (§2/§3): two Rooms in one process; a synthetic video frame published on A is received on B
-/// (via the verified `VideoRenderer` hook); all six data channels round-trip an Envelope with the
+/// (via the verified `VideoRenderer` hook); every data channel round-trips an Envelope with the
 /// correct topic/reliability; identity binding surfaces the right ParticipantID.
 final class LiveKitIntegrationTests: XCTestCase {
 
@@ -81,9 +81,9 @@ final class LiveKitIntegrationTests: XCTestCase {
         XCTAssertTrue(ok, "receiver B did not render frames from A within timeout")
     }
 
-    // MARK: - Six data channels round-trip
+    // MARK: - Data channels round-trip
 
-    func testAllSixDataChannelsRoundTrip() async throws {
+    func testAllDataChannelsRoundTrip() async throws {
         let url = try serverURL()
         let room = "itest-data-\(UUID().uuidString.prefix(8))"
         let idA = UUID(), idB = UUID()
@@ -97,8 +97,8 @@ final class LiveKitIntegrationTests: XCTestCase {
         try await transportA.openAllDataChannels()
         try await transportB.openAllDataChannels()
 
-        // Iterate DataChannel.allCases — SIX channels, not five.
-        XCTAssertEqual(DataChannel.allCases.count, 6)
+        // Iterate DataChannel.allCases — never hardcode the count.
+        XCTAssertEqual(DataChannel.allCases.count, 7)
         for channel in DataChannel.allCases {
             let chA = try await transportA.openDataChannel(channel)
             let chB = try await transportB.openDataChannel(channel)
@@ -211,6 +211,11 @@ final class LiveKitIntegrationTests: XCTestCase {
         case .state:
             var model = RoomModel(); model.addShare(window, owner: sender)
             return try WireCodec.pack(RoomSnapshot(model: model), sender: sender)
+        case .transcript:
+            return try WireCodec.pack(
+                TranscriptSegment(segmentID: UUID(), noteID: UUID(), speakerID: sender,
+                                  text: "hi", startTime: 1, isFinal: true),
+                sender: sender)
         }
     }
 }

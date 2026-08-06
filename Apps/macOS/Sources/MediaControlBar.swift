@@ -51,6 +51,14 @@ struct MediaControlBar: View {
 
             Spacer()
 
+            // Notes toggle: shows/hides the shared transcript + recording-notes pane.
+            Button {
+                model.showTranscriptPane.toggle()
+            } label: {
+                Label("Notes", systemImage: "list.bullet.rectangle")
+            }
+            .help("Show the shared transcript and recording notes")
+
             Button(role: .destructive) {
                 model.leave()
             } label: {

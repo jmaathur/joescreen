@@ -18,6 +18,10 @@ public enum MessageKind: UInt16, Codable, Sendable, CaseIterable {
     // way to extend the protocol (never renumber existing tags).
     case roomSnapshot     = 11
     case shareEvent       = 12
+    // Shared live transcript additions (per-participant local speech recognition, merged on every
+    // client). Same rule: append-only, never renumber.
+    case transcriptSegment = 13
+    case recordingNote    = 14
 
     /// The channel this kind MUST travel on, per the §3.2 matrix. This is the compile-time link
     /// between a payload and its reliability/ordering guarantees: there is no way to name a kind
@@ -39,6 +43,9 @@ public enum MessageKind: UInt16, Codable, Sendable, CaseIterable {
         // Coordination-state kinds ride the reliable/ordered `state` channel (M0).
         case .roomSnapshot, .shareEvent:
             return .state
+        // Transcript kinds ride the reliable/ordered `transcript` channel.
+        case .transcriptSegment, .recordingNote:
+            return .transcript
         }
     }
 
