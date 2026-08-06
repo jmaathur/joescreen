@@ -62,6 +62,21 @@ public final class AppModel {
     /// The local webcam track for the self-preview tile; non-nil exactly while the camera is on.
     public private(set) var localCameraTrack: VideoTrack?
 
+    // MARK: - Co-located audio gate
+
+    /// True while the co-located-speaker gate is holding the local mic muted (a marked co-located
+    /// peer is the dominant speaker). Drives the subtle control-bar indicator.
+    public private(set) var gateMuted: Bool = false
+    /// The user-marked set of co-located participants (people in the same physical room, whose
+    /// voice reaches this Mac acoustically). Persisted in UserDefaults across launches.
+    public private(set) var coLocatedParticipants: Set<ParticipantID> = []
+    /// The pure dominance-gate state machine (JoeScreenKit).
+    private var audioGate = CoLocatedAudioGate()
+    /// True when the CURRENT mic mute was applied by the gate (not the user). The gate may unmute
+    /// only what it muted itself — it must never override a manual mute.
+    private var gateAppliedMicMute = false
+    private static let coLocatedDefaultsKey = "coLocatedParticipants"
+
     /// The live connected-participant set as reported by the transport (local + all remotes). The
     /// authoritative membership source; the displayed `participants` roster is recomputed from this
     /// unioned with current share owners. Kept separate so disconnects actually remove people.
@@ -92,6 +107,9 @@ public final class AppModel {
         if launchJoin != nil { self.showJoinSheet = false }
         windowManager.model = self
         installGlobalMicHotkey()
+        coLocatedParticipants = Set(
+            (UserDefaults.standard.stringArray(forKey: Self.coLocatedDefaultsKey) ?? [])
+                .compactMap(ParticipantID.init(uuidString:)))
     }
 
     /// Install a passive global ⌘⇧M monitor so the mic can be toggled while the app isn't focused.
@@ -194,6 +212,7 @@ public final class AppModel {
             // Enable the mic on join (M5).
             try? await transport.setMicrophone(enabled: true)
             micEnabled = await transport.isMicrophoneEnabled()
+            startAudioGatePump()
             // Start the cursor pump (M6).
             let cursor = try await transport.openDataChannel(.cursor)
             let pump = CursorPump(channel: cursor, localID: localParticipantID)
@@ -237,6 +256,9 @@ public final class AppModel {
         micEnabled = false
         cameraEnabled = false
         localCameraTrack = nil
+        audioGate.release()
+        gateAppliedMicMute = false
+        gateMuted = false
         audioInputs = []
         videoInputs = []
         selectedAudioInputID = nil
@@ -448,6 +470,12 @@ public final class AppModel {
     /// publication existence, which would report "on" even while muted and wedge the toggle.
     public func toggleMic() {
         let target = !micEnabled
+        // A manual toggle is user intent: drop the gate's mute bookkeeping so it can neither hold
+        // the mic muted against the user nor unmute a manual mute later. (If the gate had muted the
+        // publication and the user now mutes, both mutes coincide — the publication stays muted.)
+        gateAppliedMicMute = false
+        gateMuted = false
+        audioGate.release()
         // Optimistic UI: flip immediately so the icon responds even if the round-trip is slow, then
         // reconcile with the transport's real state.
         micEnabled = target
@@ -515,6 +543,66 @@ public final class AppModel {
         case .notDetermined: return await AVCaptureDevice.requestAccess(for: .video)
         default: return false
         }
+    }
+
+    // MARK: - Co-located audio gate (echo/crosstalk mitigation for same-room participants)
+
+    public func isCoLocated(_ id: ParticipantID) -> Bool {
+        coLocatedParticipants.contains(id)
+    }
+
+    /// Mark/unmark a participant as co-located (same physical room). Persisted in UserDefaults.
+    public func setCoLocated(_ id: ParticipantID, _ isCoLocated: Bool) {
+        if isCoLocated {
+            coLocatedParticipants.insert(id)
+        } else {
+            coLocatedParticipants.remove(id)
+        }
+        UserDefaults.standard.set(coLocatedParticipants.map(\.uuidString),
+                                  forKey: Self.coLocatedDefaultsKey)
+    }
+
+    /// Poll the room's speaking state at 10 Hz and drive the co-located-speaker gate. The SDK
+    /// exposes levels as participant properties (`Participant.audioLevel` / `isSpeaking`), so a
+    /// light poll keeps this fully additive — no transport delegate plumbing. Cancelled with the
+    /// other pumps on leave.
+    private func startAudioGatePump() {
+        pumps.append(Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard let self, !Task.isCancelled else { return }
+                await self.audioGateTick()
+            }
+        })
+    }
+
+    /// One gate step: feed levels in, apply the output. Transitions only, and never fight the
+    /// user's manual mute — the gate may mute only while the mic is user-enabled, and may unmute
+    /// only a mute it applied itself.
+    private func audioGateTick() async {
+        let activity = await transport.audioActivitySnapshot()
+        let shouldMute = audioGate.evaluate(
+            localIsSpeaking: activity.localIsSpeaking,
+            localLevel: activity.localLevel,
+            remotes: activity.remotes,
+            coLocated: coLocatedParticipants,
+            now: ProcessInfo.processInfo.systemUptime)
+        if shouldMute, micEnabled, !gateAppliedMicMute {
+            do {
+                try await transport.setMicrophoneGateMuted(true)
+                gateAppliedMicMute = true
+            } catch {
+                AppLog.error("gate mic mute failed: \(String(describing: error))")
+            }
+        } else if !shouldMute, gateAppliedMicMute {
+            do {
+                try await transport.setMicrophoneGateMuted(false)
+                gateAppliedMicMute = false
+            } catch {
+                AppLog.error("gate mic unmute failed: \(String(describing: error))")
+            }
+        }
+        gateMuted = gateAppliedMicMute
     }
 
     // MARK: - Sharing

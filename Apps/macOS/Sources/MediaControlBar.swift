@@ -27,6 +27,14 @@ struct MediaControlBar: View {
                 onSelect: { model.selectAudioInput($0) },
                 onMenuOpen: { Task { await model.refreshAudioInputs() } })
 
+            // Subtle gate indicator: the co-located-speaker gate is holding the mic muted.
+            if model.gateMuted {
+                Label("Yielding", systemImage: "person.2.wave.2.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Mic auto-muted: a co-located participant is speaking")
+            }
+
             // Camera split-button: video.fill when live, video.slash.fill (red) when off.
             MediaSplitButton(
                 isOn: model.cameraEnabled,

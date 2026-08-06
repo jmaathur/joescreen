@@ -194,7 +194,20 @@ public actor LiveKitTransport: MediaTransport {
         room.add(delegate: observer)
 
         // R24: selective subscription is load-bearing correctness, not optimization — set BOTH true.
-        let roomOptions = RoomOptions(adaptiveStream: true, dynacast: true)
+        let roomOptions = RoomOptions(
+            // Explicit AEC/AGC/NS (+ high-pass) so the intent is pinned and verified rather than
+            // inherited from SDK defaults. On macOS (and iOS device) the heavy lifting — acoustic
+            // echo cancellation, gain control, noise suppression — is done by Apple's
+            // VoiceProcessingIO (see ensureVoiceProcessing); these flags configure WebRTC's
+            // software APM (used on the iOS Simulator) and are reported to the server as audio
+            // track features.
+            defaultAudioCaptureOptions: AudioCaptureOptions(
+                echoCancellation: true,
+                autoGainControl: true,
+                noiseSuppression: true,
+                highpassFilter: true),
+            adaptiveStream: true,
+            dynacast: true)
 
         updateState(.connecting)
         do {
@@ -320,7 +333,48 @@ public actor LiveKitTransport: MediaTransport {
     /// AVAudioEngine+Opus pipeline for the LiveKit path — DECISIONS D13-A / M5). This opens the real
     /// mic device and needs `NSMicrophoneUsageDescription` + mic TCC.
     public func setMicrophone(enabled: Bool) async throws {
+        if enabled { Self.ensureVoiceProcessing() }
         _ = try await room.localParticipant.setMicrophone(enabled: enabled)
+    }
+
+    /// Ensure Apple's VoiceProcessingIO (VPIO) is active before capture starts. On macOS, VPIO —
+    /// not WebRTC's software APM — performs the real acoustic echo cancellation, AGC, and noise
+    /// suppression (the echo canceller that keeps remote loudspeaker output out of the local mic).
+    /// It defaults to enabled; toggling it restarts the audio engine, so only flip it when it's
+    /// actually off (idempotent). Best-effort: capture still works without it, just without AEC.
+    private static func ensureVoiceProcessing() {
+        let audio = AudioManager.shared
+        guard !audio.isVoiceProcessingEnabled else { return }
+        try? audio.setVoiceProcessingEnabled(true)
+    }
+
+    /// Snapshot of local + remote speaking state/levels for the co-located-speaker gate (pure
+    /// metadata — no device access). Remote identities are mapped to ParticipantIDs via the same
+    /// binding the roster uses; unparseable identities are skipped.
+    public func audioActivitySnapshot()
+        -> (localIsSpeaking: Bool, localLevel: Float, remotes: [CoLocatedAudioGate.RemoteAudioSample]) {
+        var remotes: [CoLocatedAudioGate.RemoteAudioSample] = []
+        for participant in room.remoteParticipants.values {
+            guard let identity = participant.identity?.stringValue,
+                  let pid = participantID(forIdentity: identity) else { continue }
+            remotes.append(.init(participantID: pid,
+                                 isSpeaking: participant.isSpeaking,
+                                 level: participant.audioLevel))
+        }
+        return (room.localParticipant.isSpeaking, room.localParticipant.audioLevel, remotes)
+    }
+
+    /// Mute/unmute the local mic PUBLICATION without touching capture state or the user's
+    /// enabled/disabled intent — the co-located-speaker gate's actuator. Capture stays warm so a
+    /// release is instant (no device re-open, no VPIO re-convergence). No-op when no mic track
+    /// is published (e.g. mid-teardown).
+    public func setMicrophoneGateMuted(_ muted: Bool) async throws {
+        guard let publication = room.localParticipant.localAudioTracks.first else { return }
+        if muted {
+            try await publication.mute()
+        } else {
+            try await publication.unmute()
+        }
     }
 
     /// Whether the local participant currently has a published audio track (M5 test hook — checks
