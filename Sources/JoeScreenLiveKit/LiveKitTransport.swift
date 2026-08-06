@@ -54,6 +54,9 @@ public actor LiveKitTransport: MediaTransport {
 
     /// Remote video tracks by track name (for receiver-side rendering hooks, M2 test + M4 UI).
     private var remoteVideoTracks: [String: RemoteVideoTrack] = [:]
+    /// Track sids with a subscription-recovery loop currently running (join-race fix). Dedupes the
+    /// engine's per-attempt `didFailToSubscribeTrackWithSid` callbacks into one recovery per track.
+    private var subscriptionRecoveryInFlight: Set<String> = []
     /// Optional renderer factory: given a track name + track, produce/attach a renderer. Set by the
     /// app (M4) or a test (M2) to observe received frames. Nil = no rendering side effects.
     private var onTrackSubscribed: (@Sendable (String, RemoteVideoTrack) -> Void)?
@@ -370,7 +373,10 @@ public actor LiveKitTransport: MediaTransport {
         updateState(state)
         // On (re)connect the room re-seeds its participant list; refresh the roster so peers that
         // were present across a reconnect reappear.
-        if state == .connected { onParticipantsChanged?(currentParticipantIDs()) }
+        if state == .connected {
+            onParticipantsChanged?(currentParticipantIDs())
+            resyncRemoteVideoTracks()
+        }
     }
 
     func handleParticipantConnected(identity: String?) {
@@ -379,6 +385,7 @@ public actor LiveKitTransport: MediaTransport {
             participantToIdentity[pid] = identity
         }
         onParticipantsChanged?(currentParticipantIDs())
+        resyncRemoteVideoTracks()
     }
 
     func handleParticipantDisconnected(identity: String?) {
@@ -393,12 +400,86 @@ public actor LiveKitTransport: MediaTransport {
 
     func handleTrackSubscribed(identity: String?, trackName: String, videoTrack: RemoteVideoTrack?) {
         guard let videoTrack else { return }
+        // Idempotent: the resync enumeration may re-deliver a track already routed here.
+        guard remoteVideoTracks[trackName] !== videoTrack else { return }
         remoteVideoTracks[trackName] = videoTrack
         onTrackSubscribed?(trackName, videoTrack)
     }
 
     func handleTrackUnsubscribed(trackName: String) {
         remoteVideoTracks[trackName] = nil
+    }
+
+    /// A remote participant published a track. Auto-subscribe normally covers this; make the
+    /// subscription preference explicit so the SFU forwards it even if the publication arrived
+    /// without one (a redundant subscribe is a server-side no-op).
+    func handleTrackPublished(identity: String?, trackSid: String) {
+        guard let publication = remotePublication(identity: identity, trackSid: trackSid) else { return }
+        Task { try? await publication.set(subscribed: true) }
+    }
+
+    /// The SDK failed to attach received media to its publication (media beat the participant-info
+    /// update at join) and dropped it; at 2.15.1 nothing in the SDK retries past that. Recover with
+    /// bounded backoff: wait for the publication to appear, then TOGGLE the subscription. The SFU
+    /// still counts us as subscribed from auto-subscribe, so a plain `set(subscribed: true)` is a
+    /// server-side no-op — false→true makes it tear down and re-forward the track, after which a
+    /// fresh `didSubscribeTrack` lands through the normal path.
+    func handleTrackSubscribeFailed(identity: String?, trackSid: String) {
+        guard !subscriptionRecoveryInFlight.contains(trackSid) else { return }
+        subscriptionRecoveryInFlight.insert(trackSid)
+        Task { [weak self] in
+            await self?.recoverFailedSubscription(identity: identity, trackSid: trackSid)
+        }
+    }
+
+    private func recoverFailedSubscription(identity: String?, trackSid: String) async {
+        defer { subscriptionRecoveryInFlight.remove(trackSid) }
+        let policy = SubscriptionRetryPolicy()
+        for attempt in 0..<policy.maxAttempts {
+            let delay = policy.delay(beforeAttempt: attempt)
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            guard let publication = remotePublication(identity: identity, trackSid: trackSid) else {
+                continue // the publication info hasn't landed yet — back off and look again
+            }
+            if let videoTrack = publication.track as? RemoteVideoTrack {
+                // Media attached (via the toggle or a late retry) — route through the normal path.
+                handleTrackSubscribed(identity: identity, trackName: publication.name, videoTrack: videoTrack)
+                return
+            }
+            if publication.track != nil { return } // non-video media attached — nothing to render
+            try? await publication.set(subscribed: false)
+            try? await publication.set(subscribed: true)
+        }
+    }
+
+    /// Look up a remote publication by track sid, optionally scoped to one participant identity.
+    /// The sid-only fallback is safe: track sids are globally unique within a room.
+    private func remotePublication(identity: String?, trackSid: String) -> RemoteTrackPublication? {
+        for participant in room.remoteParticipants.values {
+            if let identity, participant.identity?.stringValue != identity { continue }
+            if let match = participant.trackPublications
+                .first(where: { $0.key.stringValue == trackSid })?.value as? RemoteTrackPublication {
+                return match
+            }
+        }
+        return nil
+    }
+
+    /// Belt-and-braces enumeration: route any already-attached remote video through the same path
+    /// as `didSubscribeTrack`. Covers publications/media that landed before `.connected` (the SDK
+    /// suppresses `didPublishTrack` pre-connect) or before the app installed its rendering hook.
+    /// Idempotent via `handleTrackSubscribed`.
+    private func resyncRemoteVideoTracks() {
+        for participant in room.remoteParticipants.values {
+            let identity = participant.identity?.stringValue
+            for publication in participant.trackPublications.values {
+                guard publication.kind == .video,
+                      let videoTrack = publication.track as? RemoteVideoTrack else { continue }
+                handleTrackSubscribed(identity: identity, trackName: publication.name, videoTrack: videoTrack)
+            }
+        }
     }
 
     func handleData(_ data: Data, topic: String) {
