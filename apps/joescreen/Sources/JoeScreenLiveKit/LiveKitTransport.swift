@@ -95,6 +95,9 @@ public actor LiveKitTransport: MediaTransport {
 
     /// SIDs we've already reported gone this session, so the unsubscribe→unpublish pair fires once.
     private var reportedGone: Set<String> = []
+    /// Track sids with a subscription-recovery loop currently running (join-race fix). Dedupes the
+    /// engine's per-attempt `didFailToSubscribeTrackWithSid` callbacks into one recovery per track.
+    private var subscriptionRecoveryInFlight: Set<String> = []
     /// SIDs we unsubscribed OURSELVES (a user-close / soft-hide), so the resulting delegate callback
     /// is suppressed — that's a self-inflicted event, not a sharer disappearing.
     private var locallyUnsubscribed: Set<String> = []
@@ -266,7 +269,20 @@ public actor LiveKitTransport: MediaTransport {
         room.add(delegate: observer)
 
         // R24: selective subscription is load-bearing correctness, not optimization — set BOTH true.
-        let roomOptions = RoomOptions(adaptiveStream: true, dynacast: true)
+        let roomOptions = RoomOptions(
+            // Explicit AEC/AGC/NS (+ high-pass) so the intent is pinned and verified rather than
+            // inherited from SDK defaults. On macOS (and iOS device) the heavy lifting — acoustic
+            // echo cancellation, gain control, noise suppression — is done by Apple's
+            // VoiceProcessingIO (see ensureVoiceProcessing); these flags configure WebRTC's
+            // software APM (used on the iOS Simulator) and are reported to the server as audio
+            // track features.
+            defaultAudioCaptureOptions: AudioCaptureOptions(
+                echoCancellation: true,
+                autoGainControl: true,
+                noiseSuppression: true,
+                highpassFilter: true),
+            adaptiveStream: true,
+            dynacast: true)
 
         updateState(.connecting)
         do {
@@ -312,6 +328,7 @@ public actor LiveKitTransport: MediaTransport {
         cameraPublication = nil
         remoteVideoTracks.removeAll()
         reportedGone.removeAll()
+        subscriptionRecoveryInFlight.removeAll()
         locallyUnsubscribed.removeAll()
         windowTrackSIDs.removeAll()
         mediaReducer = ParticipantMediaReducer()
@@ -431,7 +448,53 @@ public actor LiveKitTransport: MediaTransport {
     /// AVAudioEngine+Opus pipeline for the LiveKit path — DECISIONS D13-A / M5). This opens the real
     /// mic device and needs `NSMicrophoneUsageDescription` + mic TCC.
     public func setMicrophone(enabled: Bool) async throws {
+        #if os(macOS)
+        if enabled { Self.ensureVoiceProcessing() }
+        #endif
         _ = try await room.localParticipant.setMicrophone(enabled: enabled)
+    }
+
+    #if os(macOS)
+    /// Ensure Apple's VoiceProcessingIO (VPIO) is active before capture starts. On macOS, VPIO —
+    /// not WebRTC's software APM — performs the real acoustic echo cancellation, AGC, and noise
+    /// suppression (the echo canceller that keeps remote loudspeaker output out of the local mic).
+    /// It defaults to enabled; toggling it restarts the audio engine, so only flip it when it's
+    /// actually off (idempotent). Best-effort: capture still works without it, just without AEC.
+    /// macOS-only — on iOS the mic mute-mode fix in `connect` owns the AudioManager configuration.
+    private static func ensureVoiceProcessing() {
+        let audio = AudioManager.shared
+        guard !audio.isVoiceProcessingEnabled else { return }
+        try? audio.setVoiceProcessingEnabled(true)
+    }
+    #endif
+
+    /// Snapshot of local + remote speaking state/levels for the co-located-speaker gate (pure
+    /// metadata — no device access). Remote identities are mapped to ParticipantIDs via the same
+    /// binding the roster uses; unparseable identities are skipped.
+    public func audioActivitySnapshot()
+        -> (localIsSpeaking: Bool, localLevel: Float, remotes: [CoLocatedAudioGate.RemoteAudioSample]) {
+        var remotes: [CoLocatedAudioGate.RemoteAudioSample] = []
+        for participant in room.remoteParticipants.values {
+            guard let identity = participant.identity?.stringValue,
+                  let pid = participantID(forIdentity: identity) else { continue }
+            remotes.append(.init(participantID: pid,
+                                 isSpeaking: participant.isSpeaking,
+                                 level: participant.audioLevel))
+        }
+        return (room.localParticipant.isSpeaking, room.localParticipant.audioLevel, remotes)
+    }
+
+    /// Mute/unmute the local mic PUBLICATION without touching capture state or the user's
+    /// enabled/disabled intent — the co-located-speaker gate's actuator. Capture stays warm so a
+    /// release is instant (no device re-open, no VPIO re-convergence). No-op when no mic track
+    /// is published (e.g. mid-teardown).
+    public func setMicrophoneGateMuted(_ muted: Bool) async throws {
+        guard let publication = room.localParticipant.localAudioTracks.first else { return }
+        if muted {
+            try await publication.mute()
+        } else {
+            try await publication.unmute()
+        }
     }
 
     /// Whether the local participant currently has a published audio track (M5 test hook — checks
@@ -707,6 +770,7 @@ public actor LiveKitTransport: MediaTransport {
             onParticipantsChanged?(currentParticipantIDs())
             reseedMediaState()
             onParticipantMediaChanged?(mediaReducer.states)
+            resyncRemoteVideoTracks()
         }
     }
 
@@ -716,6 +780,7 @@ public actor LiveKitTransport: MediaTransport {
             participantToIdentity[pid] = identity
         }
         onParticipantsChanged?(currentParticipantIDs())
+        resyncRemoteVideoTracks()
         // Seed the newcomer's media state (M10): read their published/muted state right now.
         if let identity, let pid = participantID(forIdentity: identity),
            let participant = remoteParticipant(forIdentity: identity) {
@@ -793,6 +858,14 @@ public actor LiveKitTransport: MediaTransport {
         }
 
         guard let videoTrack else { return }
+        // Idempotent resync guard: the connect/participant-join enumeration (and the join-race
+        // recovery loop) can re-deliver a track that is already routed — skip re-registering the
+        // SAME track (double dimension observers, spurious hook refires). A reopen resubscribe
+        // must still flow (its SID is marked `locallyUnsubscribed`) so the lifecycle resumes.
+        if let existing = remoteVideoTracks[trackSID], existing.track === videoTrack,
+           !locallyUnsubscribed.contains(trackSID) {
+            return
+        }
         let descriptor = RemoteTrackDescriptor(
             trackSID: trackSID, trackName: trackName, sourceKind: sourceKind, ownerID: ownerID)
 
@@ -833,6 +906,75 @@ public actor LiveKitTransport: MediaTransport {
     /// would miss this: a locally-unsubscribed track fires ONLY unpublish on a later crash (verified).
     func handleTrackUnpublished(trackSID: String) {
         reportGone(trackSID: trackSID, viaUnpublish: true)
+    }
+
+    /// A remote participant published a track. Auto-subscribe normally covers this; make the
+    /// subscription preference explicit so the SFU forwards it even if the publication arrived
+    /// without one (a redundant subscribe is a server-side no-op). Never fights a user-close:
+    /// a locally-unsubscribed SID is left alone.
+    func handleTrackPublished(identity: String?, trackSid: String) {
+        guard !locallyUnsubscribed.contains(trackSid),
+              let publication = remoteTrackPublication(forSID: trackSid) else { return }
+        Task { try? await publication.set(subscribed: true) }
+    }
+
+    /// The SDK failed to attach received media to its publication (media beat the participant-info
+    /// update at join — the 2.15.1 race) and dropped it; nothing in the SDK retries past that.
+    /// Recover with bounded backoff: wait for the publication to appear, then TOGGLE the
+    /// subscription. The SFU still counts us as subscribed from auto-subscribe, so a plain
+    /// `set(subscribed: true)` is a server-side no-op — false→true makes it tear down and
+    /// re-forward the track, after which a fresh `didSubscribeTrack` lands through the normal path.
+    func handleTrackSubscribeFailed(identity: String?, trackSid: String) {
+        guard !subscriptionRecoveryInFlight.contains(trackSid) else { return }
+        subscriptionRecoveryInFlight.insert(trackSid)
+        Task { [weak self] in
+            await self?.recoverFailedSubscription(identity: identity, trackSid: trackSid)
+        }
+    }
+
+    private func recoverFailedSubscription(identity: String?, trackSid: String) async {
+        defer { subscriptionRecoveryInFlight.remove(trackSid) }
+        let policy = SubscriptionRetryPolicy()
+        for attempt in 0..<policy.maxAttempts {
+            let delay = policy.delay(beforeAttempt: attempt)
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            if locallyUnsubscribed.contains(trackSid) { return } // user closed it meanwhile
+            guard let publication = remoteTrackPublication(forSID: trackSid) else {
+                continue // the publication info hasn't landed yet — back off and look again
+            }
+            if let videoTrack = publication.track as? RemoteVideoTrack {
+                // Media attached (via the toggle or a late retry) — route through the normal path.
+                handleTrackSubscribed(
+                    identity: identity, trackSID: trackSid, trackName: publication.name,
+                    sourceKind: RemoteTrackSourceKind(publication.source),
+                    seedDimensions: publication.dimensions, videoTrack: videoTrack)
+                return
+            }
+            if publication.track != nil { return } // non-video media attached — nothing to render
+            try? await publication.set(subscribed: false)
+            try? await publication.set(subscribed: true)
+        }
+    }
+
+    /// Belt-and-braces enumeration: route any already-attached remote video through the same path
+    /// as `didSubscribeTrack`. Covers publications/media that landed before `.connected` (the SDK
+    /// suppresses delegate callbacks pre-connect) or before the app installed its hooks.
+    /// Idempotent via the same-track guard in `handleTrackSubscribed`; skips user-closed SIDs.
+    private func resyncRemoteVideoTracks() {
+        for participant in room.remoteParticipants.values {
+            let identity = participant.identity?.stringValue
+            for publication in participant.trackPublications.values {
+                guard let videoTrack = publication.track as? RemoteVideoTrack else { continue }
+                let sid = publication.sid.stringValue
+                guard !locallyUnsubscribed.contains(sid) else { continue }
+                handleTrackSubscribed(
+                    identity: identity, trackSID: sid, trackName: publication.name,
+                    sourceKind: RemoteTrackSourceKind(publication.source),
+                    seedDimensions: publication.dimensions, videoTrack: videoTrack)
+            }
+        }
     }
 
     /// Dimension updates for a subscribed track (seeded at subscribe, then on didUpdateDimensions).

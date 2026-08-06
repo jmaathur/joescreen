@@ -15,7 +15,7 @@ struct MediaControlBar: View {
         HStack(spacing: 10) {
             // Microphone split-button: mic.fill when live, mic.slash.fill (red) when muted.
             MediaSplitButton(
-                isOn: model.micEnabled,
+                isOn: model.micLive,
                 onSymbol: "mic.fill",
                 offSymbol: "mic.slash.fill",
                 onHelp: "Mute microphone",
@@ -26,6 +26,14 @@ struct MediaControlBar: View {
                 onToggle: { model.toggleMic() },
                 onSelect: { model.selectAudioInput($0) },
                 onMenuOpen: { Task { await model.refreshAudioInputs() } })
+
+            // Subtle gate indicator: the co-located-speaker gate is holding the mic muted.
+            if model.gateMuted {
+                Label("Yielding", systemImage: "person.2.wave.2.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Mic auto-muted: a co-located participant is speaking")
+            }
 
             // Camera split-button: video.fill when live, video.slash.fill (red) when off.
             MediaSplitButton(
@@ -74,6 +82,14 @@ struct MediaControlBar: View {
             }
 
             Spacer()
+
+            // Notes toggle: shows/hides the shared transcript + recording-notes pane.
+            Button {
+                model.showTranscriptPane.toggle()
+            } label: {
+                Label("Notes", systemImage: "list.bullet.rectangle")
+            }
+            .help("Show the shared transcript and recording notes")
 
             Button(role: .destructive) {
                 model.leave()

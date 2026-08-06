@@ -101,8 +101,15 @@ final class WireProtocolRoundTripTests: XCTestCase {
         XCTAssertEqual(MessageKind.roomSnapshot.policy.ordering, .ordered)
         XCTAssertFalse(MessageKind.roomSnapshot.policy.requiresSequence)
         XCTAssertFalse(MessageKind.shareEvent.policy.requiresSequence)
-        // Every channel — including the new `state` channel — has a total policy (six channels).
-        XCTAssertEqual(DataChannel.allCases.count, 6)
+        // Transcript channel: reliable + ordered, no seq (segmentID dedupe + note-event LWW).
+        XCTAssertEqual(MessageKind.transcriptSegment.policy.channel, .transcript)
+        XCTAssertEqual(MessageKind.recordingNote.policy.channel, .transcript)
+        XCTAssertEqual(MessageKind.transcriptSegment.policy.reliability, .reliable)
+        XCTAssertEqual(MessageKind.transcriptSegment.policy.ordering, .ordered)
+        XCTAssertFalse(MessageKind.transcriptSegment.policy.requiresSequence)
+        XCTAssertFalse(MessageKind.recordingNote.policy.requiresSequence)
+        // Every channel — including `state` and `transcript` — has a total policy.
+        XCTAssertEqual(DataChannel.allCases.count, 7)
         for ch in DataChannel.allCases {
             XCTAssertEqual(ChannelPolicy.policy(for: ch).channel, ch)
         }
@@ -165,5 +172,40 @@ final class WireProtocolRoundTripTests: XCTestCase {
         let ctrl = TerminalControl(cols: 80, rows: 24, writerID: p)
         let cenv = try WireCodec.pack(ctrl, sender: sender)
         XCTAssertEqual(try WireCodec.unpack(cenv, as: TerminalControl.self), ctrl)
+    }
+
+    // Shared transcript: a segment round-trips on the `transcript` channel (no seq — receivers
+    // dedupe by segmentID, final overwrites partial).
+    func testTranscriptSegmentRoundTrip() throws {
+        let note = UUID(), segmentID = UUID(), speaker = UUID()
+        let msg = TranscriptSegment(segmentID: segmentID, noteID: note, speakerID: speaker,
+                                    text: "hello world", startTime: 1_700_000_000.5, isFinal: false)
+        let env = try WireCodec.pack(msg, sender: sender)
+        XCTAssertEqual(env.kind, .transcriptSegment)
+        XCTAssertEqual(env.kind?.channel, .transcript)
+        XCTAssertNil(env.seq, "transcript channel does not require a seq")
+        XCTAssertEqual(try WireCodec.unpack(env, as: TranscriptSegment.self), msg)
+
+        let final = TranscriptSegment(segmentID: segmentID, noteID: note, speakerID: speaker,
+                                      text: "hello world.", startTime: 1_700_000_000.5, isFinal: true)
+        let env2 = try WireCodec.pack(final, sender: sender)
+        XCTAssertEqual(try WireCodec.unpack(env2, as: TranscriptSegment.self), final)
+    }
+
+    // Shared transcript: note start/stop events round-trip on the `transcript` channel.
+    func testRecordingNoteEventRoundTrip() throws {
+        let note = UUID()
+        let start = RecordingNoteEvent(noteID: note, action: .start,
+                                       startedAt: 1_700_000_000, title: "Standup")
+        let env = try WireCodec.pack(start, sender: sender)
+        XCTAssertEqual(env.kind, .recordingNote)
+        XCTAssertEqual(env.kind?.channel, .transcript)
+        XCTAssertNil(env.seq)
+        XCTAssertEqual(try WireCodec.unpack(env, as: RecordingNoteEvent.self), start)
+
+        let stop = RecordingNoteEvent(noteID: note, action: .stop, startedAt: 1_700_000_000,
+                                      endedAt: 1_700_000_600, title: "Standup")
+        let env2 = try WireCodec.pack(stop, sender: sender)
+        XCTAssertEqual(try WireCodec.unpack(env2, as: RecordingNoteEvent.self), stop)
     }
 }

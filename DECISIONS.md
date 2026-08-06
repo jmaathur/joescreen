@@ -189,6 +189,7 @@ SwiftTerm-rendered views on all peers (iOS is a full terminal client — text, n
 redaction (regex + Shannon-entropy) is applied BEFORE transmit in `SecretRedactor` (implemented +
 unit-tested), documented as best-effort and **never a security boundary.**
 
+<<<<<<< HEAD
 ## D15 — Receive-side window lifecycle is a pure reducer (M9)
 The correctness of "movable window shares" (no frozen ghosts, no duplicate windows on reopen, no
 SFU-blip flap, soft-hide releases downlink) lives in a pure `RemoteWindowLifecycle` reducer in
@@ -278,6 +279,51 @@ and M11 (`display:`) both build on this one contract; a single implementation ke
   exceptingWindows:[])` — excludes ALL of JoeScreen's windows including future remote-share viewers,
   so a display share never re-captures our own UI. The sharer's `ShareBorderOverlay` is likewise
   invisible to receivers (our app is excluded).
+
+## D19 — Speech-to-text: per-participant LOCAL transcription over a `transcript` data channel
+Each participant transcribes THEIR OWN mic locally with Apple's Speech framework
+(`SFSpeechRecognizer` + `SFSpeechAudioBufferRecognitionRequest` fed by a dedicated `AVAudioEngine`
+input tap — a SEPARATE engine from LiveKit's mic capture, voice processing OFF since LiveKit owns
+AEC) and publishes `TranscriptSegment`s to everyone over a NEW reliable/ordered `transcript` data
+channel (`MessageKind` tags 14/15, append-only per the wire rule; old clients skip them via the
+Envelope unknown-kind tolerance). Every client merges segments by `segmentID` (final overwrites
+partial) into one shared transcript attributed by speaker. Recording-note boundaries are shared
+start/stop `RecordingNoteEvent`s applied idempotently (last-writer-wins by event time), so ANY
+participant can stop the current note and start a new one and everyone converges on the same notes
+list. On-device recognition when `supportsOnDeviceRecognition`, server-based otherwise; speech
+auth denial or recognizer unavailability fails SOFT (that user just doesn't contribute segments).
+**Why local-per-participant:** no central transcriber to deploy/scale, speaker attribution is free
+(speaker = publisher), and no audio leaves the device beyond the already-encrypted call audio —
+only text hits the data channel. **Live-only sync:** pre-join transcript history is NOT replayed to
+late joiners (a history snapshot is a future addition if needed). iOS out of scope.
+
+## D20 — Share-state sync: receivers UNION-MERGE snapshots; unshares travel as ShareEvents
+Per-process `RoomModel.revision` counters start at 0 on every peer, so the old last-writer-wins
+snapshot gate collided across CONCURRENT sharers and silently dropped foreign shares (the "window
+renders but the share isn't in the list" bug). Receivers now union-merge foreign snapshots per
+windowID (`RoomModel.merge(snapshot:excludingOwner:)`): shares present on either side survive,
+pause/ShareInfo updates adopt the snapshot's values, and the local participant's own shares are
+excluded (local-authoritative — a stale foreign mirror can never resurrect a just-ended share).
+Removal never travels via snapshot absence; it arrives as the ordered `.unshared` ShareEvent (plus
+owner-disconnect pruning). `.shared` ShareEvents apply incrementally so the share list fills in
+even before any snapshot. On a new participant joining, existing members re-broadcast their
+snapshot once so late joiners learn every existing share. `revision` remains an outgoing
+diagnostic stamp only; receivers never gate on it and never bump it.
+
+## D21 — Co-located audio gate + join-race subscription recovery
+- **Co-located gate:** two people in one physical room double each other's audio (acoustic +
+  mic path). True cross-device AEC isn't available from client SDK primitives, so the pragmatic
+  mitigation is a dominance gate (`CoLocatedAudioGate`, pure logic + hysteresis): when a
+  user-MARKED co-located peer clearly dominates, the local mic publication yields (gate-muted,
+  capture stays warm); it releases on peer silence or clear local takeover, and never overrides a
+  manual mute. Marking lives in the roster context menu, persisted in UserDefaults. The mic toggle
+  acts on the EFFECTIVE state (`micLive` = user intent minus gate hold).
+- **Join-race recovery:** in client-sdk-swift 2.15.1, media arriving before the publication's
+  participant-info update makes the engine drop the track after 2×0.2s retries
+  (`didFailToSubscribeTrackWithSid`) — the late joiner never renders an already-live share. The
+  transport now recovers with bounded backoff (`SubscriptionRetryPolicy`, false→true subscription
+  toggle) and enumerates already-attached publications on `.connected`/participant-join as a
+  belt-and-braces resync.
 
 ---
 

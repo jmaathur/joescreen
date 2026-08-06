@@ -45,6 +45,28 @@ final class LiveKitRoomObserver: NSObject, RoomDelegate, Sendable {
     // MARK: - Tracks
 
     func room(_ room: Room, participant: RemoteParticipant,
+              didPublishTrack publication: RemoteTrackPublication) {
+        let identity = participant.identity?.stringValue
+        let trackSid = publication.sid.stringValue
+        Task { [weak transport] in
+            await transport?.handleTrackPublished(identity: identity, trackSid: trackSid)
+        }
+    }
+
+    /// Fired when the SDK fails to attach received media to a publication — the join-time race at
+    /// 2.15.1: media can arrive before the participant-info update carrying the publication, the
+    /// engine gives up after 2 retries × 0.2s, and the media is dropped. Nothing in the SDK retries
+    /// past that, so the transport runs its own bounded recovery (see `handleTrackSubscribeFailed`).
+    func room(_ room: Room, participant: RemoteParticipant,
+              didFailToSubscribeTrackWithSid trackSid: Track.Sid, error: LiveKitError) {
+        let identity = participant.identity?.stringValue
+        let sid = trackSid.stringValue
+        Task { [weak transport] in
+            await transport?.handleTrackSubscribeFailed(identity: identity, trackSid: sid)
+        }
+    }
+
+    func room(_ room: Room, participant: RemoteParticipant,
               didSubscribeTrack publication: RemoteTrackPublication) {
         let identity = participant.identity?.stringValue
         let name = publication.name

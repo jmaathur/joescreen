@@ -70,6 +70,13 @@ struct JoeScreenApp: App {
         .windowResizability(.contentSize)
         .commands {
             SharedWindowsCommands(model: model)
+            CommandMenu("Call") {
+                Button(model.micLive ? "Mute Microphone" : "Unmute Microphone") {
+                    model.toggleMic()
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(model.phase != .inCall)
+            }
         }
 
         // Menu-bar residency (backlog #5): quick controls + Recent list even with no window open.
@@ -86,7 +93,7 @@ struct JoeScreenMenu: View {
 
     var body: some View {
         if model.phase == .inCall {
-            Button(model.micEnabled ? "Mute Mic" : "Unmute Mic") { model.toggleMic() }
+            Button(model.micLive ? "Mute Mic" : "Unmute Mic") { model.toggleMic() }
             Button("Share…") { model.beginShare() }
             if let invite = model.inviteURL {
                 Button("Copy Invite Link") {

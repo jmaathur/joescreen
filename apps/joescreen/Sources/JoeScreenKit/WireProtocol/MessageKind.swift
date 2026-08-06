@@ -21,6 +21,10 @@ public enum MessageKind: UInt16, Codable, Sendable, CaseIterable {
     // F4 remote control: a participant's request to drive a window (rides the input channel so it
     // serializes with the input it gates). Appended — old peers decode nil and ignore.
     case controlRequest   = 13
+    // Shared live transcript additions (per-participant local speech recognition, merged on every
+    // client). Same rule: append-only, never renumber (13 was already claimed by controlRequest).
+    case transcriptSegment = 14
+    case recordingNote    = 15
 
     /// The channel this kind MUST travel on, per the §3.2 matrix. This is the compile-time link
     /// between a payload and its reliability/ordering guarantees: there is no way to name a kind
@@ -42,6 +46,9 @@ public enum MessageKind: UInt16, Codable, Sendable, CaseIterable {
         // Coordination-state kinds ride the reliable/ordered `state` channel (M0).
         case .roomSnapshot, .shareEvent:
             return .state
+        // Transcript kinds ride the reliable/ordered `transcript` channel.
+        case .transcriptSegment, .recordingNote:
+            return .transcript
         }
     }
 

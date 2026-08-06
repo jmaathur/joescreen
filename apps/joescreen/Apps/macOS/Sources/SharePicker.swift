@@ -58,6 +58,8 @@ final class SharePicker: NSObject, SCContentSharingPickerObserver, @unchecked Se
     func contentSharingPicker(_ picker: SCContentSharingPicker,
                               didUpdateWith filter: SCContentFilter,
                               for stream: SCStream?) {
+        // The user made a selection — deactivate the picker so its UI doesn't linger on screen.
+        picker.isActive = false
         let pick = Self.resolvePick(from: filter)
         lock.lock(); let done = completion; let ambiguous = onAmbiguous; if pick != nil { completion = nil; onAmbiguous = nil }; lock.unlock()
         if let pick, let done {
@@ -68,6 +70,7 @@ final class SharePicker: NSObject, SCContentSharingPickerObserver, @unchecked Se
     }
 
     func contentSharingPicker(_ picker: SCContentSharingPicker, didCancelFor stream: SCStream?) {
+        picker.isActive = false
         lock.lock(); completion = nil; onAmbiguous = nil; lock.unlock()
     }
 

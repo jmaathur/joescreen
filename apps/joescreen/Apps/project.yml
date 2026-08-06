@@ -112,6 +112,8 @@ targets:
         NSMicrophoneUsageDescription: "JoeScreen uses your microphone for live voice during a shared session."
         # Camera string for the webcam bubbles (F11): shown in the camera-TCC prompt.
         NSCameraUsageDescription: "JoeScreen can share your camera as an optional video bubble."
+        # Speech recognition string (shared live transcript): shown in the speech-TCC prompt.
+        NSSpeechRecognitionUsageDescription: "JoeScreen transcribes your microphone so call participants can share a live transcript."
         # Opt in to Continuity Camera (iPhone as webcam) in AVFoundation device enumeration; without
         # this, CameraCapturer.captureDevices() logs a warning and omits the Continuity device.
         NSCameraUseContinuityCameraDeviceType: true

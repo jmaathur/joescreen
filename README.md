@@ -172,8 +172,13 @@ DECISIONS.md RISKS.md TESTING.md
 - ✅ **Working macOS call app:** Direct Session Mode join (link / launch-arg / URL scheme), connect to
   a self-hosted LiveKit SFU, share a window (SCK → VP9), render every peer's window as a live movable
   `NSWindow`, voice on join, coalesced cursors, mirrored `RoomModel` over a reliable `state` channel.
+- ✅ **Shared live transcript + recording notes (macOS):** each participant transcribes their own mic
+  locally (Apple Speech, on-device when supported) and publishes segments over a reliable `transcript`
+  data channel; every client merges them into one speaker-attributed live transcript, and anyone can
+  stop the current recording note and start a new one from the Notes pane (D19). Live-only — no
+  history replay to late joiners.
 - ✅ **Verified end-to-end** against `livekit-server --dev`: video A→B renders (real
-  capture→VP9→SFU→decode→render), all six data channels round-trip, identity binding, audio
+  capture→VP9→SFU→decode→render), all data channels round-trip, identity binding, audio
   publish/subscribe metadata. 117-test offline gate green; iOS viewer app builds + runs.
 - ✅ SharePlay coordination layer (`GroupSessionCoordinator: SessionProviding`) compiles against the
   real GroupActivities framework + unit-tested against a `FakeSessionProvider`.

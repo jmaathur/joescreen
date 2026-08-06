@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Observation
 import JoeScreenKit
 import JoeScreenLiveKit
@@ -67,10 +68,28 @@ public final class AppModel {
     /// crash tears the window down promptly (≤2s target).
     private static let renegotiationGraceSeconds: UInt64 = 2
 
+    // MARK: - Shared transcript (live speech-to-text + recording notes)
+
+    /// The merged shared transcript: every participant's segments (deduped by segmentID, final over
+    /// partial) plus the recording-note boundary events, all applied idempotently. Pure projection
+    /// source for the transcript pane (D19).
+    public private(set) var transcript = TranscriptModel()
+    /// Whether the transcript/notes pane is visible in the session view.
+    public var showTranscriptPane: Bool = false
+    /// Local mic → shared transcript (Apple Speech on its own audio engine). Observable; the UI
+    /// reads `state` directly to render the transcribe toggle + soft-failure reason.
+    public let transcriptionService = TranscriptionService()
+    private var transcriptChannel: (any WireDataChannel)?
+
     // MARK: - Local media controls (mic + webcam)
 
     /// Whether the local microphone is currently publishing. Drives the mic toggle in the control bar.
     public private(set) var micEnabled: Bool = false
+    /// The EFFECTIVE mic state — what the connected room actually hears: the user's intent
+    /// (`micEnabled`) minus any gate-applied hold (`gateMuted`). The toggle displays and acts on
+    /// this so its direction always matches the audible state of the connected person, never just
+    /// the last manual intent.
+    public var micLive: Bool { micEnabled && !gateMuted }
     /// Whether the local webcam is currently publishing. Drives the camera toggle in the control bar.
     public private(set) var cameraEnabled: Bool = false
     /// The selectable audio-input devices for the mic dropdown (refreshed on join / when opened).
@@ -87,6 +106,24 @@ public final class AppModel {
     /// (you don't subscribe to your own publications, so there's no remote track). Populated when a
     /// share goes live, cleared on unshare. Observable so the tile re-renders when it becomes available.
     public private(set) var localWindowTracks: [WindowID: VideoTrack] = [:]
+
+    // MARK: - Co-located audio gate (D21)
+
+    /// True while the co-located-speaker gate is holding the local mic muted (a marked co-located
+    /// peer is the dominant speaker). Drives the subtle control-bar indicator.
+    public private(set) var gateMuted: Bool = false
+    /// The user-marked set of co-located participants (people in the same physical room, whose
+    /// voice reaches this Mac acoustically). Persisted in UserDefaults across launches.
+    public private(set) var coLocatedParticipants: Set<ParticipantID> = []
+    /// The pure dominance-gate state machine (JoeScreenKit).
+    private var audioGate = CoLocatedAudioGate()
+    /// True when the CURRENT mic mute was applied by the gate (not the user). The gate may unmute
+    /// only what it muted itself — it must never override a manual mute.
+    private var gateAppliedMicMute = false
+    private static let coLocatedDefaultsKey = "JoeScreen.coLocatedParticipants"
+    /// Token for the passive global ⌘⇧M key monitor. Retained so the monitor (and the ability to
+    /// remove it) lives as long as the model.
+    private var globalMicHotkeyMonitor: Any?
 
     /// Whether to join the next call MUTED (backlog #2). Persisted; default false (join unmuted).
     public var joinMuted: Bool {
@@ -172,6 +209,25 @@ public final class AppModel {
         if launchJoin != nil { self.showJoinSheet = false }
         windowManager.model = self
         hoverShare = HoverShareController(model: self)
+        installGlobalMicHotkey()
+        coLocatedParticipants = Set(
+            (UserDefaults.standard.stringArray(forKey: Self.coLocatedDefaultsKey) ?? [])
+                .compactMap(ParticipantID.init(uuidString:)))
+    }
+
+    /// Install a passive global ⌘⇧M monitor so the mic can be toggled while the app isn't focused.
+    /// The monitor only observes the event (the focused app still receives it). macOS may withhold
+    /// global key events without Input Monitoring permission, so the in-app Call-menu shortcut
+    /// (same keystroke) remains the guaranteed path.
+    private func installGlobalMicHotkey() {
+        globalMicHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.modifierFlags.contains(.command), event.modifierFlags.contains(.shift),
+                  event.charactersIgnoringModifiers?.lowercased() == "m" else { return }
+            Task { @MainActor in
+                guard let self, self.phase == .inCall else { return }
+                self.toggleMic()
+            }
+        }
     }
 
     // MARK: - Join entry points
@@ -333,11 +389,16 @@ public final class AppModel {
             let state = try await transport.openDataChannel(.state)
             self.stateChannel = state
             startStatePump(state)
+            // Shared transcript channel (D19): merged live speech-to-text + recording notes.
+            let transcriptCh = try await transport.openDataChannel(.transcript)
+            self.transcriptChannel = transcriptCh
+            startTranscriptPump(transcriptCh)
             // Enable the mic on join (M5) UNLESS the user opted to join muted (backlog #2). Joining
             // muted still publishes the track (LiveKit mutes rather than unpublishes), so unmuting
             // later is instant and peers see the correct mic-off badge meanwhile.
             try? await transport.setMicrophone(enabled: !joinMuted)
             micEnabled = await transport.isMicrophoneEnabled()
+            startAudioGatePump()
             // Start the cursor pump (M6).
             let cursor = try await transport.openDataChannel(.cursor)
             let pump = CursorPump(channel: cursor, localID: localParticipantID)
@@ -413,6 +474,13 @@ public final class AppModel {
         micEnabled = false
         cameraEnabled = false
         localCameraTrack = nil
+        audioGate.release()
+        gateAppliedMicMute = false
+        gateMuted = false
+        transcriptionService.stop()
+        transcript = TranscriptModel()
+        transcriptChannel = nil
+        showTranscriptPane = false
         audioInputs = []
         videoInputs = []
         selectedAudioInputID = nil
@@ -480,6 +548,7 @@ public final class AppModel {
         // events, the participant diff still tears their windows down) and is pruned from the mirror
         // WITHOUT bumping revision (receiver-local; the host stays the revision authority).
         let departed = transportParticipants.subtracting(ids)
+        let newMemberAppeared = !ids.subtracting(transportParticipants).isEmpty
         transportParticipants = ids
         for owner in departed {
             for (windowID, win) in remoteWindows where win.ownerID == owner {
@@ -491,6 +560,12 @@ public final class AppModel {
             room.pruneParticipant(owner) // no revision bump
         }
         recomputeRoster()
+        // Late-joiner resync (D20): when a NEW participant appeared and we know shares worth
+        // advertising, rebroadcast our snapshot so the joiner learns every existing share (nothing
+        // else re-broadcasts on join — a late joiner got the video track but never the share list).
+        // The joiner itself has an empty room and stays silent, and each existing member
+        // rebroadcasts at most once per join, so this can't storm.
+        if newMemberAppeared && !room.shares.isEmpty { broadcastState() }
         Task { [weak self] in await self?.refreshDisplayNames() }
     }
 
@@ -659,10 +734,11 @@ public final class AppModel {
         switch kind {
         case .roomSnapshot:
             guard let snap = try? WireCodec.unpack(envelope, as: RoomSnapshot.self) else { return }
-            // Last-writer-wins: only apply a strictly newer snapshot.
-            if snap.model.revision > room.revision || room.revision == 0 {
-                applyRoom(snap.model)
-            }
+            // Union-merge (D20): per-process revisions collide across concurrent sharers, so the
+            // old strictly-newer revision gate silently dropped foreign shares. Apply every
+            // snapshot; `merge` keeps our copy authoritative for our own shares and never removes
+            // (unshares arrive as ordered ShareEvents).
+            applyRoom(snap.model)
             // Late-joiner ink catch-up (F9): if we hold no ink yet and the snapshot carries some,
             // seed it. DrawModel.apply is monotonic per-author, so re-seeding once is safe; we only
             // do it while empty to avoid clobbering live local strokes with a stale snapshot.
@@ -671,45 +747,61 @@ public final class AppModel {
             }
         case .shareEvent:
             guard let ev = try? WireCodec.unpack(envelope, as: ShareEvent.self) else { return }
-            // A prompt unshare notification: drive the window's lifecycle removal (the authoritative
-            // snapshot confirms it too, but this reacts without waiting for the next snapshot).
-            if ev.action == .unshared, lifecycles[ev.windowID] != nil {
-                feed(ev.windowID, .shareRemovedFromSnapshot)
-            }
-            // `shared` is handled when the track subscribes; the snapshot carries authoritative state.
+            applyShareEvent(ev)
         default:
             break
         }
     }
 
-    /// Replace the mirrored room with `newRoom`, REPAIRING owner attribution and pause state on open
-    /// viewer windows and feeding snapshot-removal events into the lifecycle. Only a JOINER applies
-    /// foreign snapshots; the local sharer's own windows are driven by its capture.
-    private func applyRoom(_ newRoom: RoomModel) {
-        let previousShares = Set(room.shares.keys)
-        room = newRoom
-        recomputeRoster()
+    /// Apply a remote share/unshare event to the mirrored room (D20). Events about windows WE are
+    /// capturing locally are ignored — our own shares are local-authoritative, so a replayed or
+    /// stale event must never re-own or end a live local share.
+    private func applyShareEvent(_ ev: ShareEvent) {
+        guard localCaptures[ev.windowID] == nil else { return }
+        switch ev.action {
+        case .shared:
+            // The track subscription opens the viewer window; the event carries the authoritative
+            // owner + advisory info, so record the share here — previously `.shared` was ignored
+            // and the share list only filled in via (revision-gated, droppable) snapshots.
+            if room.applyForeignShare(ev.windowID, owner: ev.ownerID, info: ev.info) {
+                repairWindowChrome(ev.windowID)
+                recomputeRoster()
+            }
+        case .unshared:
+            room.pruneShare(ev.windowID) // no revision bump (receiver-local)
+            recomputeRoster()
+            // Prompt lifecycle removal — without waiting for any snapshot.
+            if lifecycles[ev.windowID] != nil {
+                feed(ev.windowID, .shareRemovedFromSnapshot)
+            }
+        }
+    }
 
+    /// Merge a foreign snapshot into the mirrored room (D20), then repair owner attribution, title,
+    /// aspect, and pause state on open viewer windows. The local participant's own shares are
+    /// excluded from the merge — they are local-authoritative.
+    private func applyRoom(_ newRoom: RoomModel) {
+        room.merge(snapshot: newRoom, excludingOwner: localParticipantID)
+        recomputeRoster()
         // Owner + metadata repair: a track that subscribed before the first snapshot had a
         // placeholder owner/title; every snapshot repairs it so chrome recolors/retitles live.
-        for (windowID, win) in remoteWindows {
-            if let owner = newRoom.owner(of: windowID), owner != win.ownerID {
-                win.ownerID = owner
-                windowManager.refreshTitle(win)
-            }
-            if let info = newRoom.info(of: windowID) {
-                let newTitle = info.title, newApp = info.appName, aspect = info.sourceAspectRatio
-                if win.title != newTitle || win.appName != newApp { win.title = newTitle; win.appName = newApp; windowManager.refreshTitle(win) }
-                if let aspect, win.aspectRatio != aspect { win.aspectRatio = aspect }
-            }
-            // Pause badge from broadcast state (previously ignored).
-            win.isPaused = (newRoom.pauseState(of: windowID) == .paused)
-        }
+        for windowID in remoteWindows.keys { repairWindowChrome(windowID) }
+    }
 
-        // A share that disappeared from this authoritative snapshot → lifecycle removal.
-        for windowID in previousShares where newRoom.owner(of: windowID) == nil {
-            feed(windowID, .shareRemovedFromSnapshot)
+    /// Re-derive one open viewer window's owner/title/aspect/pause badge from the merged room state.
+    private func repairWindowChrome(_ windowID: WindowID) {
+        guard let win = remoteWindows[windowID] else { return }
+        if let owner = room.owner(of: windowID), owner != win.ownerID {
+            win.ownerID = owner
+            windowManager.refreshTitle(win)
         }
+        if let info = room.info(of: windowID) {
+            let newTitle = info.title, newApp = info.appName, aspect = info.sourceAspectRatio
+            if win.title != newTitle || win.appName != newApp { win.title = newTitle; win.appName = newApp; windowManager.refreshTitle(win) }
+            if let aspect, win.aspectRatio != aspect { win.aspectRatio = aspect }
+        }
+        // Pause badge from broadcast state (previously ignored).
+        win.isPaused = (room.pauseState(of: windowID) == .paused)
     }
 
     // MARK: - Remote windows (lifecycle-driven, M9)
@@ -762,18 +854,25 @@ public final class AppModel {
             return
         }
         AppLog.info("remote track subscribed → opening native window for \(windowID)")
-        // Owner attribution priority: authoritative snapshot > descriptor identity > windowID
-        // (repaired by applyRoom). ShareInfo (if the snapshot already has it) seeds aspect/title.
-        let owner = room.owner(of: windowID) ?? ownerHint ?? windowID
+        // Owner attribution priority: authoritative room state > descriptor identity > windowID
+        // placeholder for coloring only (repaired by applyRoom / ShareEvents). The placeholder is
+        // NEVER inserted into the roster — the old `?? windowID` fallback injected a phantom
+        // ParticipantID via transportParticipants (D20).
+        let owner = room.owner(of: windowID) ?? ownerHint
+        // Reconcile list ↔ windows: if room state doesn't know this share yet, record it now so
+        // the share list and the open window agree even before the snapshot/ShareEvent lands.
+        if let owner, room.owner(of: windowID) == nil {
+            room.applyForeignShare(windowID, owner: owner) // no revision bump (receiver-local)
+        }
         let info = room.info(of: windowID)
         let win = RemoteVideoWindow(
-            windowID: windowID, ownerID: owner, track: track,
+            windowID: windowID, ownerID: owner ?? windowID, track: track,
             aspectRatio: info?.sourceAspectRatio, title: info?.title, appName: info?.appName)
         win.isPaused = (room.pauseState(of: windowID) == .paused)
         remoteWindows[windowID] = win
         lifecycles[windowID] = RemoteWindowLifecycle(
             reconnecting: mediaState == .reconnecting)
-        transportParticipants.insert(owner)
+        if let owner { transportParticipants.insert(owner) }
         recomputeRoster()
         feed(windowID, .trackSubscribed) // → openWindow effect
     }
@@ -1008,22 +1107,94 @@ public final class AppModel {
         Task { [weak self] in await self?.refreshVideoInputs() }
     }
 
-    /// Toggle the microphone on/off. LiveKit MUTES the mic publication on disable (it doesn't
-    /// unpublish), so the live/muted state is read back from `isMicrophoneEnabled()` — not from
-    /// publication existence, which would report "on" even while muted and wedge the toggle.
+    /// Toggle the microphone on/off. Acts on the EFFECTIVE state (`micLive`): if the co-located
+    /// gate is currently holding the mic muted, the toggle means "go live" — it lifts the gate's
+    /// hold and unmutes — rather than blindly inverting the stale manual intent and re-muting.
+    /// LiveKit MUTES the mic publication on disable (it doesn't unpublish), so the live/muted
+    /// state is read back from `isMicrophoneEnabled()` — not from publication existence, which
+    /// would report "on" even while muted and wedge the toggle.
     public func toggleMic() {
-        let target = !micEnabled
+        let target = !micLive
+        // A manual toggle is user intent: drop the gate's mute bookkeeping so it can neither hold
+        // the mic muted against the user nor unmute a manual mute later.
+        let gateHeldMute = gateAppliedMicMute
+        gateAppliedMicMute = false
+        gateMuted = false
+        audioGate.release()
         // Optimistic UI: flip immediately so the icon responds even if the round-trip is slow, then
         // reconcile with the transport's real state.
         micEnabled = target
         Task {
             do {
+                // Lift a gate-applied publication mute explicitly — setMicrophone(enabled:) alone
+                // doesn't reliably clear a mute the gate applied directly to the publication.
+                if target, gateHeldMute { try await transport.setMicrophoneGateMuted(false) }
                 try await transport.setMicrophone(enabled: target)
             } catch {
                 AppLog.error("toggleMic failed: \(String(describing: error))")
             }
             micEnabled = await transport.isMicrophoneEnabled()
         }
+    }
+
+    // MARK: - Co-located audio gate (D21 — echo/crosstalk mitigation for same-room participants)
+
+    public func isCoLocated(_ id: ParticipantID) -> Bool {
+        coLocatedParticipants.contains(id)
+    }
+
+    /// Mark/unmark a participant as co-located (same physical room). Persisted in UserDefaults.
+    public func setCoLocated(_ id: ParticipantID, _ isCoLocated: Bool) {
+        if isCoLocated {
+            coLocatedParticipants.insert(id)
+        } else {
+            coLocatedParticipants.remove(id)
+        }
+        UserDefaults.standard.set(coLocatedParticipants.map(\.uuidString),
+                                  forKey: Self.coLocatedDefaultsKey)
+    }
+
+    /// Poll the room's speaking state at 10 Hz and drive the co-located-speaker gate. The SDK
+    /// exposes levels as participant properties (`Participant.audioLevel` / `isSpeaking`), so a
+    /// light poll keeps this fully additive — no transport delegate plumbing. Cancelled with the
+    /// other pumps on leave.
+    private func startAudioGatePump() {
+        pumps.append(Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard let self, !Task.isCancelled else { return }
+                await self.audioGateTick()
+            }
+        })
+    }
+
+    /// One gate step: feed levels in, apply the output. Transitions only, and never fight the
+    /// user's manual mute — the gate may mute only while the mic is user-enabled, and may unmute
+    /// only a mute it applied itself.
+    private func audioGateTick() async {
+        let activity = await transport.audioActivitySnapshot()
+        let shouldMute = audioGate.evaluate(
+            localIsSpeaking: activity.localIsSpeaking,
+            localLevel: activity.localLevel,
+            remotes: activity.remotes,
+            coLocated: coLocatedParticipants,
+            now: ProcessInfo.processInfo.systemUptime)
+        if shouldMute, micEnabled, !gateAppliedMicMute {
+            do {
+                try await transport.setMicrophoneGateMuted(true)
+                gateAppliedMicMute = true
+            } catch {
+                AppLog.error("gate mic mute failed: \(String(describing: error))")
+            }
+        } else if !shouldMute, gateAppliedMicMute {
+            do {
+                try await transport.setMicrophoneGateMuted(false)
+                gateAppliedMicMute = false
+            } catch {
+                AppLog.error("gate mic unmute failed: \(String(describing: error))")
+            }
+        }
+        gateMuted = gateAppliedMicMute
     }
 
     /// Route the mic to a specific input device (nil = keep current). Persists the selection so the
@@ -1453,6 +1624,86 @@ public final class AppModel {
         guard let env = try? WireCodec.pack(ev, sender: owner),
               let bytes = try? WireCodec.encode(env) else { return }
         Task { try? await channel.send(bytes) }
+    }
+
+    // MARK: - Shared transcript (D19 — live speech-to-text + recording notes)
+
+    private func startTranscriptPump(_ channel: any WireDataChannel) {
+        let incoming = channel.incoming()
+        pumps.append(Task { @MainActor [weak self] in
+            for await data in incoming {
+                self?.applyTranscriptPayload(data)
+            }
+        })
+    }
+
+    /// Apply an inbound `transcript`-channel payload: a TranscriptSegment (merged by segmentID,
+    /// final over partial) or a RecordingNoteEvent (note boundary, idempotent last-writer-wins).
+    private func applyTranscriptPayload(_ data: Data) {
+        guard let envelope = try? WireCodec.decode(data), let kind = envelope.kind else {
+            return // unknown/unreadable — skip, never crash
+        }
+        switch kind {
+        case .transcriptSegment:
+            guard let seg = try? WireCodec.unpack(envelope, as: TranscriptSegment.self) else { return }
+            transcript.apply(seg)
+        case .recordingNote:
+            guard let ev = try? WireCodec.unpack(envelope, as: RecordingNoteEvent.self) else { return }
+            transcript.apply(ev)
+        default:
+            break
+        }
+    }
+
+    /// Publish a transcript-channel payload (segments and note events share one send path).
+    private func broadcastTranscript<M: WireMessage>(_ payload: M) {
+        guard let me = localParticipantID, let channel = transcriptChannel else { return }
+        guard let env = try? WireCodec.pack(payload, sender: me),
+              let bytes = try? WireCodec.encode(env) else { return }
+        Task { try? await channel.send(bytes) }
+    }
+
+    /// Toggle local mic transcription. Opt-in; when off (or denied — the service fails soft) the
+    /// local user just doesn't contribute segments while everyone else's still render.
+    public func toggleTranscription() {
+        if transcriptionService.state == .off {
+            startTranscription()
+        } else {
+            transcriptionService.stop()
+        }
+    }
+
+    private func startTranscription() {
+        guard let me = localParticipantID else { return }
+        // A fresh note starts automatically when transcription begins (unless one is already open).
+        if transcript.currentNote == nil { startNewNote() }
+        transcriptionService.onSegment = { [weak self] segmentID, text, startTime, isFinal in
+            guard let self, let noteID = self.transcript.currentNote?.noteID else { return }
+            let seg = TranscriptSegment(segmentID: segmentID, noteID: noteID, speakerID: me,
+                                        text: text, startTime: startTime, isFinal: isFinal)
+            self.transcript.apply(seg)
+            self.broadcastTranscript(seg)
+        }
+        transcriptionService.start()
+    }
+
+    /// Finalize the current recording note and open a fresh one. ANY participant can do this; the
+    /// boundary events broadcast, so every client converges on the same notes list.
+    public func stopAndStartNewNote() {
+        let now = Date().timeIntervalSince1970
+        if let current = transcript.currentNote {
+            let stop = RecordingNoteEvent(noteID: current.noteID, action: .stop,
+                                          startedAt: current.startedAt, endedAt: now)
+            transcript.apply(stop)
+            broadcastTranscript(stop)
+        }
+        startNewNote(at: now)
+    }
+
+    private func startNewNote(at now: TimeInterval = Date().timeIntervalSince1970) {
+        let ev = RecordingNoteEvent(noteID: UUID(), action: .start, startedAt: now)
+        transcript.apply(ev)
+        broadcastTranscript(ev)
     }
 
     /// A local share's source window settled at a new size (post-stabilizer). Update the advisory

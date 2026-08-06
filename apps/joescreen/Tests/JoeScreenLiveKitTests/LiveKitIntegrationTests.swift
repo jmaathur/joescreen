@@ -97,8 +97,8 @@ final class LiveKitIntegrationTests: XCTestCase {
         try await transportA.openAllDataChannels()
         try await transportB.openAllDataChannels()
 
-        // Iterate DataChannel.allCases — SIX channels, not five.
-        XCTAssertEqual(DataChannel.allCases.count, 6)
+        // Iterate DataChannel.allCases — never hardcode the count in the loop below.
+        XCTAssertEqual(DataChannel.allCases.count, 7)
         for channel in DataChannel.allCases {
             let chA = try await transportA.openDataChannel(channel)
             let chB = try await transportB.openDataChannel(channel)
@@ -254,6 +254,11 @@ final class LiveKitIntegrationTests: XCTestCase {
         case .state:
             var model = RoomModel(); model.addShare(window, owner: sender)
             return try WireCodec.pack(RoomSnapshot(model: model), sender: sender)
+        case .transcript:
+            return try WireCodec.pack(
+                TranscriptSegment(segmentID: UUID(), noteID: UUID(), speakerID: sender,
+                                  text: "hi", startTime: 1, isFinal: true),
+                sender: sender)
         }
     }
 }

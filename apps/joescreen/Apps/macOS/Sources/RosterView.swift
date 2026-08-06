@@ -58,6 +58,12 @@ struct RosterRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            if !isLocal, model.isCoLocated(id) {
+                Image(systemName: "person.2.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Co-located: your mic auto-yields while this participant speaks")
+            }
             let count = model.room.windows(ownedBy: id).count
             if count > 0 {
                 Image(systemName: "macwindow")
@@ -69,5 +75,12 @@ struct RosterRow: View {
             }
         }
         .padding(.vertical, 2)
+        .contextMenu {
+            if !isLocal {
+                Button(model.isCoLocated(id) ? "Unmark as Co-located" : "Mark as Co-located") {
+                    model.setCoLocated(id, !model.isCoLocated(id))
+                }
+            }
+        }
     }
 }
