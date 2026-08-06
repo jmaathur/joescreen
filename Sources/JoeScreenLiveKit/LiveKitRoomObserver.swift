@@ -42,6 +42,16 @@ final class LiveKitRoomObserver: NSObject, RoomDelegate, Sendable {
         Task { [weak transport] in await transport?.handleParticipantDisconnected(identity: identity) }
     }
 
+    // MARK: - Participant names (display labels for roster / shares / window titles)
+
+    func room(_ room: Room, participant: Participant, didUpdateName name: String) {
+        Task { [weak transport] in await transport?.handleParticipantNamesChanged() }
+    }
+
+    func room(_ room: Room, participant: Participant, didUpdateMetadata metadata: String?) {
+        Task { [weak transport] in await transport?.handleParticipantNamesChanged() }
+    }
+
     // MARK: - Tracks
 
     func room(_ room: Room, participant: RemoteParticipant,

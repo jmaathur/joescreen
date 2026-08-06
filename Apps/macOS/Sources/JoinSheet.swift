@@ -11,6 +11,8 @@ struct JoinSheet: View {
     @State private var room: String = "demo"
     // Fresh identity per sheet presentation — never a shared default.
     @State private var identity: String = UUID().uuidString
+    // Display name other participants see; defaults to the OS user name.
+    @State private var name: String = DirectJoinParameters.defaultName
 
     private var parsedURL: URL? { URL(string: serverURL.trimmingCharacters(in: .whitespaces)) }
     private var canJoin: Bool {
@@ -30,6 +32,7 @@ struct JoinSheet: View {
                 TextField("Server URL", text: $serverURL, prompt: Text("ws://localhost:7880"))
                     .textContentType(.URL)
                 TextField("Room", text: $room, prompt: Text("demo"))
+                TextField("Name", text: $name, prompt: Text("Shown to other participants"))
                 HStack {
                     TextField("Identity", text: $identity)
                         .font(.system(.body, design: .monospaced))
@@ -58,7 +61,8 @@ struct JoinSheet: View {
                     model.requestJoin(DirectJoinParameters(
                         serverURL: url,
                         room: room.trimmingCharacters(in: .whitespaces),
-                        identity: identity.trimmingCharacters(in: .whitespaces)))
+                        identity: identity.trimmingCharacters(in: .whitespaces),
+                        name: name))
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

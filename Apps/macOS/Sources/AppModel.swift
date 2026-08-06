@@ -33,6 +33,9 @@ public final class AppModel {
     /// joiner it's the last snapshot applied from the `state` channel (last-writer-wins on revision).
     public private(set) var room = RoomModel()
     public private(set) var participants: Set<ParticipantID> = []
+    /// ParticipantID → display name as published by each peer (LiveKit name/metadata). Empty for
+    /// peers running older builds — `shortLabel(for:)` falls back to the identity prefix for them.
+    public private(set) var names: [ParticipantID: String] = [:]
     public private(set) var mediaState: MediaConnectionState = .disconnected
     public var showJoinSheet: Bool = true
 
@@ -111,7 +114,7 @@ public final class AppModel {
         let identity = params.identity
         // Dev path: mint a local HS256 token (#if DEBUG). Production uses TokenClient (M7).
         #if DEBUG
-        let token = DevTokenMinter.mint(identity: identity, room: params.room)
+        let token = DevTokenMinter.mint(identity: identity, room: params.room, name: params.name)
         #else
         let token: String
         do { token = try await TokenClient.fetch(server: params.serverURL, room: params.room, identity: identity) }
@@ -131,6 +134,13 @@ public final class AppModel {
             Task { @MainActor in self?.applyParticipantSet(ids) }
         }
 
+        // Install the display-name hook BEFORE connecting so peers' names (from their JWT name
+        // claim or their post-connect metadata publish) drive roster/share/window labels from
+        // the very first roster paint.
+        await transport.setOnParticipantNamesChanged { [weak self] names in
+            Task { @MainActor in self?.applyParticipantNames(names) }
+        }
+
         // Bridge connection state + participants.
         startConnectionPump()
         startParticipantPump()
@@ -139,6 +149,10 @@ public final class AppModel {
             AppLog.info("connecting to \(params.serverURL.absoluteString) room=\(params.room) identity=\(identity)")
             try await transport.connect(.init(serverURL: params.serverURL, authToken: token))
             AppLog.info("connected; opening channels")
+            // Publish our display name (LiveKit name + raw-string metadata) so peers render it
+            // instead of the identity prefix. Best-effort — a token without the update grant
+            // (production token server today) silently keeps the JWT-claim name only.
+            await transport.publishDisplayName(params.name)
             try await transport.openAllDataChannels()
             let state = try await transport.openDataChannel(.state)
             self.stateChannel = state
@@ -195,6 +209,7 @@ public final class AppModel {
         selectedVideoInputID = nil
         phase = .idle
         participants = []
+        names = [:]
         transportParticipants = []
         room = RoomModel()
         localParticipantID = nil
@@ -229,6 +244,12 @@ public final class AppModel {
     private func applyParticipantSet(_ ids: Set<ParticipantID>) {
         transportParticipants = ids
         recomputeRoster()
+    }
+
+    /// Record the latest display-name map from the transport. `shortLabel(for:)` reads it, so the
+    /// roster, share tiles, and window titles all pick up name changes automatically.
+    private func applyParticipantNames(_ newNames: [ParticipantID: String]) {
+        names = newNames
     }
 
     /// The displayed roster = live transport members ∪ current share owners ∪ me. Share owners are
@@ -542,6 +563,8 @@ public final class AppModel {
     }
 
     public func shortLabel(for id: ParticipantID) -> String {
-        String(id.uuidString.prefix(4))
+        // Prefer the peer's published display name; fall back to the identity prefix for peers
+        // running older builds that don't publish one.
+        names[id] ?? String(id.uuidString.prefix(4))
     }
 }
