@@ -15,7 +15,7 @@ struct MediaControlBar: View {
         HStack(spacing: 10) {
             // Microphone split-button: mic.fill when live, mic.slash.fill (red) when muted.
             MediaSplitButton(
-                isOn: model.micEnabled,
+                isOn: model.micLive,
                 onSymbol: "mic.fill",
                 offSymbol: "mic.slash.fill",
                 onHelp: "Mute microphone",

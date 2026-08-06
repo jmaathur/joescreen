@@ -52,7 +52,7 @@ struct JoeScreenApp: App {
         .windowResizability(.contentSize)
         .commands {
             CommandMenu("Call") {
-                Button(model.micEnabled ? "Mute Microphone" : "Unmute Microphone") {
+                Button(model.micLive ? "Mute Microphone" : "Unmute Microphone") {
                     model.toggleMic()
                 }
                 .keyboardShortcut("m", modifiers: [.command, .shift])

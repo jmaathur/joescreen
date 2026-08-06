@@ -58,6 +58,11 @@ public final class AppModel {
 
     /// Whether the local microphone is currently publishing. Drives the mic toggle in the control bar.
     public private(set) var micEnabled: Bool = false
+    /// The EFFECTIVE mic state — what the connected room actually hears: the user's intent
+    /// (`micEnabled`) minus any gate-applied hold (`gateMuted`). The toggle displays and acts on
+    /// this so its direction always matches the audible state of the connected person, never just
+    /// the last manual intent.
+    public var micLive: Bool { micEnabled && !gateMuted }
     /// Whether the local webcam is currently publishing. Drives the camera toggle in the control bar.
     public private(set) var cameraEnabled: Bool = false
     /// The selectable audio-input devices for the mic dropdown (refreshed on join / when opened).
@@ -484,14 +489,17 @@ public final class AppModel {
         Task { [weak self] in await self?.refreshVideoInputs() }
     }
 
-    /// Toggle the microphone on/off. LiveKit MUTES the mic publication on disable (it doesn't
-    /// unpublish), so the live/muted state is read back from `isMicrophoneEnabled()` — not from
-    /// publication existence, which would report "on" even while muted and wedge the toggle.
+    /// Toggle the microphone on/off. Acts on the EFFECTIVE state (`micLive`): if the co-located
+    /// gate is currently holding the mic muted, the toggle means "go live" — it lifts the gate's
+    /// hold and unmutes — rather than blindly inverting the stale manual intent and re-muting.
+    /// LiveKit MUTES the mic publication on disable (it doesn't unpublish), so the live/muted
+    /// state is read back from `isMicrophoneEnabled()` — not from publication existence, which
+    /// would report "on" even while muted and wedge the toggle.
     public func toggleMic() {
-        let target = !micEnabled
+        let target = !micLive
         // A manual toggle is user intent: drop the gate's mute bookkeeping so it can neither hold
-        // the mic muted against the user nor unmute a manual mute later. (If the gate had muted the
-        // publication and the user now mutes, both mutes coincide — the publication stays muted.)
+        // the mic muted against the user nor unmute a manual mute later.
+        let gateHeldMute = gateAppliedMicMute
         gateAppliedMicMute = false
         gateMuted = false
         audioGate.release()
@@ -500,6 +508,9 @@ public final class AppModel {
         micEnabled = target
         Task {
             do {
+                // Lift a gate-applied publication mute explicitly — setMicrophone(enabled:) alone
+                // doesn't reliably clear a mute the gate applied directly to the publication.
+                if target, gateHeldMute { try await transport.setMicrophoneGateMuted(false) }
                 try await transport.setMicrophone(enabled: target)
             } catch {
                 AppLog.error("toggleMic failed: \(String(describing: error))")
