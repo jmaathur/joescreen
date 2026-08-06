@@ -124,6 +124,15 @@ public final class AppModel {
             Task { @MainActor in self?.addRemoteWindow(windowID: windowID, track: track) }
         }
 
+        // Mirror hook: when a track unsubscribes (unshare, disconnect, subscription drop), close
+        // its native window. Without this the window keeps rendering the dead track — a frozen
+        // black rectangle with the owner-color border — until a state-channel message happens to
+        // arrive, and those are regularly missed.
+        await transport.setOnTrackUnsubscribed { [weak self] trackName in
+            guard let windowID = LiveKitTransport.windowID(fromTrackName: trackName) else { return }
+            Task { @MainActor in self?.removeRemoteWindowIfForeign(windowID) }
+        }
+
         // Install the participant-roster hook BEFORE connecting so early joiners aren't missed. This
         // is what makes EVERYONE connected appear in the roster — not just those who've shared a
         // window (the old snapshot-only derivation left non-sharing peers, and often yourself, absent).
@@ -227,7 +236,20 @@ public final class AppModel {
     /// This is the LIVE membership source (local + all connected remotes), so disconnects actually
     /// remove people — unlike the additive snapshot path.
     private func applyParticipantSet(_ ids: Set<ParticipantID>) {
+        let departed = transportParticipants.subtracting(ids)
         transportParticipants = ids
+        // Close any remote window whose owner just left: its tracks are dead, so the window would
+        // otherwise linger as a frozen bordered rectangle. Attribute ownership ONLY through the
+        // room's share map — `addRemoteWindow` may have stored a synthetic fallback owner (the
+        // windowID itself) that was never a transport member, so it always lands in `departed` and
+        // would wrongly close a live window. Synthetic-owned windows are closed by the
+        // track-unsubscribed hook instead.
+        if !departed.isEmpty {
+            let orphaned = remoteWindows
+                .filter { room.owner(of: $0.key).map { departed.contains($0) } ?? false }
+                .map(\.key)
+            for windowID in orphaned { removeRemoteWindowIfForeign(windowID) }
+        }
         recomputeRoster()
     }
 

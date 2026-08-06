@@ -35,6 +35,8 @@ final class SharePicker: NSObject, SCContentSharingPickerObserver, @unchecked Se
     func contentSharingPicker(_ picker: SCContentSharingPicker,
                               didUpdateWith filter: SCContentFilter,
                               for stream: SCStream?) {
+        // The user made a selection — deactivate the picker so its UI doesn't linger on screen.
+        picker.isActive = false
         // Resolve the chosen window's CGWindowID synchronously from the filter (macOS 15.2+ exposes
         // includedWindows directly). We extract the plain UInt32 ID here — no non-Sendable object
         // crosses the actor boundary.
@@ -47,6 +49,7 @@ final class SharePicker: NSObject, SCContentSharingPickerObserver, @unchecked Se
     }
 
     func contentSharingPicker(_ picker: SCContentSharingPicker, didCancelFor stream: SCStream?) {
+        picker.isActive = false
         lock.lock(); completion = nil; lock.unlock()
     }
 

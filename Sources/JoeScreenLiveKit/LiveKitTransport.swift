@@ -58,6 +58,11 @@ public actor LiveKitTransport: MediaTransport {
     /// app (M4) or a test (M2) to observe received frames. Nil = no rendering side effects.
     private var onTrackSubscribed: (@Sendable (String, RemoteVideoTrack) -> Void)?
 
+    /// Optional hook fired whenever a remote track is unsubscribed (unshare, disconnect, or a
+    /// subscription drop). The app closes the matching native window so a dead track can't linger
+    /// as a frozen rectangle on screen. Nil = no side effects.
+    private var onTrackUnsubscribed: (@Sendable (String) -> Void)?
+
     /// Optional hook fired whenever the participant set changes (someone connects/disconnects, or a
     /// (re)connection re-seeds the roster). Carries the CURRENT full set of participant IDs (remote +
     /// local). The app drives its roster from this so peers appear even before they share anything.
@@ -80,6 +85,13 @@ public actor LiveKitTransport: MediaTransport {
         self.onTrackSubscribed = handler
         // Fire for any already-subscribed tracks so a late observer doesn't miss them.
         for (name, track) in remoteVideoTracks { handler(name, track) }
+    }
+
+    /// Install a hook invoked whenever a remote track is unsubscribed (mirror of
+    /// `setOnTrackSubscribed`). Carries only the track name — the track is already gone.
+    /// Idempotent; last writer wins.
+    public func setOnTrackUnsubscribed(_ handler: @escaping @Sendable (String) -> Void) {
+        self.onTrackUnsubscribed = handler
     }
 
     /// Install a hook fired whenever the participant set changes. Fires ONCE immediately with the
@@ -399,6 +411,7 @@ public actor LiveKitTransport: MediaTransport {
 
     func handleTrackUnsubscribed(trackName: String) {
         remoteVideoTracks[trackName] = nil
+        onTrackUnsubscribed?(trackName)
     }
 
     func handleData(_ data: Data, topic: String) {
