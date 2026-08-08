@@ -8,7 +8,7 @@ struct TranscriptPane: View {
     @Environment(AppModel.self) private var model
 
     private var isTranscribing: Bool {
-        model.transcriptionService.state == .running
+        model.transcriptionEnabled
     }
 
     /// Current note's finalized segments followed by live partials, in time order.
@@ -38,8 +38,8 @@ struct TranscriptPane: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(isTranscribing ? Color.accentColor : Color.secondary)
                 .help(isTranscribing
-                      ? "Stop transcribing your microphone"
-                      : "Transcribe your microphone into the shared transcript")
+                      ? "Stop transcribing the call"
+                      : "Transcribe the call: everyone's speech, tagged per speaker (recognized on this Mac)")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -64,7 +64,7 @@ struct TranscriptPane: View {
                     Text("No transcript yet")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Enable Transcribe to contribute your mic;\neveryone's speech merges here live.")
+                    Text("Enable Transcribe to caption the whole call —\nevery speaker's words, tagged with their name.")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)

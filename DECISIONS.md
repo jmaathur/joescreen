@@ -297,6 +297,16 @@ auth denial or recognizer unavailability fails SOFT (that user just doesn't cont
 only text hits the data channel. **Live-only sync:** pre-join transcript history is NOT replayed to
 late joiners (a history snapshot is a future addition if needed). iOS out of scope.
 
+**Multiplayer dictation addendum (2026-08-07):** enabling Transcribe ALSO transcribes every REMOTE
+speaker locally — one `SpeechRecognitionStream` per remote audio track, fed by a LiveKit
+`AudioRenderer` (decoded, pre-mix, per-participant, so attribution is structural) — so ONE person
+enabling it captions the whole room on their own Mac. Locally-recognized remote segments are
+**local-only, never broadcast** (every listener could recognize the same audio; broadcasting would
+multiply utterances by listener count and diverge). When a speaker self-publishes segments (their
+own Transcribe is on), local recognition of them is suppressed for a 15 s rolling window — their
+own mic's consented, better-audio segments win, and nothing renders twice. Streams reconcile on a
+2 s poll (join/leave/republish/suppression/death all converge on the next tick).
+
 ## D20 — Share-state sync: receivers UNION-MERGE snapshots; unshares travel as ShareEvents
 Per-process `RoomModel.revision` counters start at 0 on every peer, so the old last-writer-wins
 snapshot gate collided across CONCURRENT sharers and silently dropped foreign shares (the "window

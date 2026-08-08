@@ -14,6 +14,17 @@ export interface Release {
 // Newest first.
 export const RELEASES: Release[] = [
 	{
+		version: "0.3.0",
+		date: "2026-08-07",
+		tag: "early beta",
+		highlights: [
+			"Multiplayer dictation: one person enables Transcribe and the whole call is captioned, every line tagged with the speaker's name",
+			"Speakers who also transcribe publish their own captions, which take precedence automatically",
+			"Fix: local mic transcription produced no text (now taps the call's echo-cancelled capture; muted mics are never transcribed)",
+			"Fix: transcription no longer gives up after quiet stretches",
+		],
+	},
+	{
 		version: "0.2.1",
 		date: "2026-08-07",
 		tag: "early beta",

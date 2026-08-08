@@ -7,6 +7,25 @@ The user-facing highlights from each version are also shown in the "What's new" 
 [joescreen.cheffing.dev](https://joescreen.cheffing.dev) — keep that section (in
 `apps/joescreen-download/src/changelog.ts`) in sync with the entries here when you cut a release.
 
+## [0.3.0] — 2026-08-07 · early beta
+
+### New
+- **Multiplayer dictation** — one person enabling Transcribe now captions the WHOLE call on their
+  Mac: every remote speaker's audio is transcribed locally (one recognizer per participant track,
+  so attribution is structural) and every line is tagged with the speaker's name — `Joe: hello /
+  Jeevan: hi / Henry: hello`. Speakers who also enable Transcribe publish their own captions
+  (better audio, their consent), which automatically take precedence — nothing appears twice.
+
+### Fixed
+- **Local mic transcription produced no text at all** — the dedicated audio engine it used receives
+  only silence while the call's voice processing owns the microphone. Transcription now taps the
+  call's own echo-cancelled capture, which also guarantees a muted mic is never transcribed.
+- **Transcription no longer dies after quiet stretches** — the recognizer's routine "no speech
+  detected" end-of-utterance was treated as a fatal failure ("Speech recognition repeatedly
+  failed"); it now just rolls a fresh recognition task.
+
+[0.3.0]: https://joescreen.cheffing.dev
+
 ## [0.2.1] — 2026-08-07 · early beta
 
 ### Fixed

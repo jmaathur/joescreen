@@ -77,8 +77,20 @@ public final class AppModel {
     /// Whether the transcript/notes pane is visible in the session view.
     public var showTranscriptPane: Bool = false
     /// Local mic → shared transcript (Apple Speech on its own audio engine). Observable; the UI
-    /// reads `state` directly to render the transcribe toggle + soft-failure reason.
+    /// reads `state` for the soft-failure reason.
     public let transcriptionService = TranscriptionService()
+    /// Remote speakers → local transcript (one recognition stream per remote audio track), so one
+    /// person enabling Transcribe captions the whole room on their own Mac. Local-only segments.
+    private let remoteTranscription = RemoteTranscriptionManager()
+    /// The user's transcription toggle (drives BOTH pipelines). Kept separate from the service's
+    /// state so the button reflects intent even when one pipeline fails soft (e.g. mic denied but
+    /// remote captions still running).
+    public private(set) var transcriptionEnabled = false
+    /// Last time each remote speaker self-published a transcript segment. While recent (see
+    /// `selfPublishSuppressionWindow`), our local recognition of that speaker is suppressed — their
+    /// own mic's segments (better audio, their consent) win, and nothing shows up twice.
+    private var lastSelfPublishedSegmentAt: [ParticipantID: TimeInterval] = [:]
+    private static let selfPublishSuppressionWindow: TimeInterval = 15
     private var transcriptChannel: (any WireDataChannel)?
 
     // MARK: - Local media controls (mic + webcam)
@@ -477,9 +489,10 @@ public final class AppModel {
         audioGate.release()
         gateAppliedMicMute = false
         gateMuted = false
-        transcriptionService.stop()
+        stopTranscription()
         transcript = TranscriptModel()
         transcriptChannel = nil
+        lastSelfPublishedSegmentAt = [:]
         showTranscriptPane = false
         audioInputs = []
         videoInputs = []
@@ -1647,6 +1660,9 @@ public final class AppModel {
         case .transcriptSegment:
             guard let seg = try? WireCodec.unpack(envelope, as: TranscriptSegment.self) else { return }
             transcript.apply(seg)
+            // The speaker is transcribing THEMSELVES — suppress our local recognition of their
+            // audio for the window, so self-published segments win and nothing appears twice.
+            lastSelfPublishedSegmentAt[seg.speakerID] = Date().timeIntervalSince1970
         case .recordingNote:
             guard let ev = try? WireCodec.unpack(envelope, as: RecordingNoteEvent.self) else { return }
             transcript.apply(ev)
@@ -1663,28 +1679,70 @@ public final class AppModel {
         Task { try? await channel.send(bytes) }
     }
 
-    /// Toggle local mic transcription. Opt-in; when off (or denied — the service fails soft) the
-    /// local user just doesn't contribute segments while everyone else's still render.
+    /// Toggle transcription (D19 multiplayer dictation). Opt-in. When ON, this Mac transcribes the
+    /// LOCAL mic (broadcast to everyone) AND every remote speaker's audio (local-only, per-speaker
+    /// attributed), so the whole room appears tagged — `Joe: hello / Henry: hi` — even if nobody
+    /// else enables it. Failures stay soft per pipeline.
     public func toggleTranscription() {
-        if transcriptionService.state == .off {
-            startTranscription()
+        if transcriptionEnabled {
+            stopTranscription()
         } else {
-            transcriptionService.stop()
+            startTranscription()
         }
     }
 
     private func startTranscription() {
         guard let me = localParticipantID else { return }
+        transcriptionEnabled = true
         // A fresh note starts automatically when transcription begins (unless one is already open).
         if transcript.currentNote == nil { startNewNote() }
+        transcriptionService.localAudioTrack = { [weak self] in
+            await self?.transport.localMicAudioTrack()
+        }
         transcriptionService.onSegment = { [weak self] segmentID, text, startTime, isFinal in
             guard let self, let noteID = self.transcript.currentNote?.noteID else { return }
+            // Muted mic → no transcription of it. The track delivers no buffers while muted, but a
+            // final can straddle the mute moment — gate emission on the effective state too.
+            guard self.micLive else { return }
             let seg = TranscriptSegment(segmentID: segmentID, noteID: noteID, speakerID: me,
                                         text: text, startTime: startTime, isFinal: isFinal)
             self.transcript.apply(seg)
             self.broadcastTranscript(seg)
         }
         transcriptionService.start()
+
+        // Remote speakers: per-track local recognition, suppressed for anyone self-publishing.
+        remoteTranscription.isSuppressed = { [weak self] speaker in
+            self?.isSelfPublishingTranscript(speaker) ?? false
+        }
+        remoteTranscription.onSegment = { [weak self] speaker, segmentID, text, startTime, isFinal in
+            guard let self, let noteID = self.transcript.currentNote?.noteID else { return }
+            let seg = TranscriptSegment(segmentID: segmentID, noteID: noteID, speakerID: speaker,
+                                        text: text, startTime: startTime, isFinal: isFinal)
+            // LOCAL-ONLY — never broadcast (every listener could recognize the same audio; the
+            // speaker's own broadcast segments are the shared source of truth when they exist).
+            self.transcript.apply(seg)
+        }
+        // Speech authorization gates BOTH pipelines; await it once here so the remote manager never
+        // spins up streams that are doomed to fail (and re-fail every poll tick) while denied.
+        Task { @MainActor [weak self] in
+            guard await TranscriptionService.requestSpeechAuthorization() == .authorized else { return }
+            guard let self, self.transcriptionEnabled else { return } // toggled off mid-prompt
+            self.remoteTranscription.start(transport: self.transport)
+        }
+    }
+
+    private func stopTranscription() {
+        transcriptionEnabled = false
+        transcriptionService.stop()
+        remoteTranscription.stop()
+    }
+
+    /// Whether `speaker` has self-published a transcript segment recently (their own transcription
+    /// is running) — our local recognition of them yields for the suppression window.
+    private func isSelfPublishingTranscript(_ speaker: ParticipantID) -> Bool {
+        guard let t = lastSelfPublishedSegmentAt[speaker] else { return false }
+        return Date().timeIntervalSince1970 - t < Self.selfPublishSuppressionWindow
     }
 
     /// Finalize the current recording note and open a fresh one. ANY participant can do this; the

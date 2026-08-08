@@ -484,6 +484,30 @@ public actor LiveKitTransport: MediaTransport {
         return (room.localParticipant.isSpeaking, room.localParticipant.audioLevel, remotes)
     }
 
+    /// The LOCAL published mic track (D19 self transcription taps LiveKit's own AEC'd capture via
+    /// an `AudioRenderer` — a second AVAudioEngine on the same input receives only silence while
+    /// VPIO owns the device). Nil until the mic has been enabled once; a muted publication delivers
+    /// no buffers, so transcription naturally goes quiet while muted.
+    public func localMicAudioTrack() -> LocalAudioTrack? {
+        room.localParticipant.localAudioTracks.compactMap { $0.track as? LocalAudioTrack }.first
+    }
+
+    /// The currently-subscribed remote AUDIO track per participant (D19 remote transcription: the
+    /// app attaches an `AudioRenderer` per track to feed per-speaker speech recognition). Decoded,
+    /// pre-mix, per-participant audio — speaker attribution is structural. Participants without a
+    /// subscribed audio track (muted publications deliver no buffers anyway) are simply absent.
+    public func remoteAudioTracksByParticipant() -> [ParticipantID: RemoteAudioTrack] {
+        var out: [ParticipantID: RemoteAudioTrack] = [:]
+        for participant in room.remoteParticipants.values {
+            guard let identity = participant.identity?.stringValue,
+                  let pid = participantID(forIdentity: identity) else { continue }
+            if let track = participant.audioTracks.compactMap({ $0.track as? RemoteAudioTrack }).first {
+                out[pid] = track
+            }
+        }
+        return out
+    }
+
     /// Mute/unmute the local mic PUBLICATION without touching capture state or the user's
     /// enabled/disabled intent — the co-located-speaker gate's actuator. Capture stays warm so a
     /// release is instant (no device re-open, no VPIO re-convergence). No-op when no mic track

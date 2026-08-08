@@ -2,27 +2,29 @@ import Foundation
 import Observation
 import Speech
 import AVFoundation
+import LiveKit
 
 /// Transcribes the LOCAL user's mic with Apple's Speech framework and emits segments for the shared
-/// transcript (each participant transcribes their own audio; segments merge on every client).
+/// transcript. The local user's segments are broadcast to every peer; remote participants' audio is
+/// transcribed locally by `RemoteTranscriptionManager` (D19), so one person enabling Transcribe
+/// captions the whole room on their own Mac.
 ///
-/// Audio comes from a DEDICATED `AVAudioEngine` input tap — separate from LiveKit's mic capture —
-/// and voice processing stays OFF on this engine (LiveKit owns AEC on its own). On-device
-/// recognition is used when `supportsOnDeviceRecognition`, with the server-based fallback
-/// otherwise. Fails SOFT: if speech authorization is denied or the recognizer is unavailable, the
-/// local user simply doesn't contribute segments (everyone else's still render) and `state`
-/// surfaces why.
-///
-/// Emission policy: partials are throttled (~300 ms, latest-wins); finals are emitted immediately.
-/// Partial updates and the final for one utterance share a `segmentID` so receivers dedupe
-/// (final overwrites partial) via `TranscriptModel`.
+/// Audio comes from an `AudioRenderer` on LiveKit's OWN published mic track — NOT a second
+/// `AVAudioEngine`: while LiveKit's VoiceProcessingIO owns the input device, a second plain engine
+/// on the same device receives only silence (verified empirically — the original dedicated-engine
+/// design produced `peak=0.0000` forever). The track feed is AEC'd, and a muted publication
+/// delivers no buffers, so a muted mic is never transcribed. Recognition itself (request/task
+/// lifecycle, utterance identity, partial throttle, benign "no speech" restarts) lives in
+/// `SpeechRecognitionStream`. Fails SOFT: if speech authorization is denied or the recognizer is
+/// unavailable, the local user simply doesn't contribute segments (remote captions still work) and
+/// `state` surfaces why.
 @MainActor
 @Observable
 public final class TranscriptionService {
 
-    /// Failures in engine/tap setup that must fail SOFT (state → .unavailable), never crash.
+    /// Failures in pipeline setup that must fail SOFT (state → .unavailable), never crash.
     enum PipelineError: Error {
-        case invalidInputFormat
+        case recognizerUnavailable
     }
 
     public enum State: Equatable {
@@ -39,20 +41,15 @@ public final class TranscriptionService {
     public var onSegment: (@MainActor (_ segmentID: UUID, _ text: String,
                                        _ startTime: TimeInterval, _ isFinal: Bool) -> Void)?
 
-    private var recognizer: SFSpeechRecognizer?
-    private var engine: AVAudioEngine?
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
+    /// Provider of the CURRENT local mic track (the transport's, injected by AppModel). Nil until
+    /// the mic has been enabled once; the attach loop keeps polling, so transcription starts
+    /// flowing whenever the track appears (or re-appears with a new identity after a republish).
+    public var localAudioTrack: (@MainActor () async -> LocalAudioTrack?)?
 
-    /// Identity + start of the utterance currently being recognized (shared by its partials/final).
-    private var currentSegmentID = UUID()
-    private var currentSegmentStart: TimeInterval = 0
-    /// Latest un-emitted partial text (flushed by the throttle loop).
-    private var pendingPartial: String?
-    private var partialFlushTask: Task<Void, Never>?
-    /// Restart guard: recognition tasks error out on a whim (server tasks die ~1/minute); we
-    /// restart the pipeline, but not faster than this, to avoid a hot failure loop.
-    private var lastRestartAt: TimeInterval = 0
+    private var stream: SpeechRecognitionStream?
+    private var renderer: SpeechBufferRenderer?
+    private var attachedTrack: LocalAudioTrack?
+    private var attachTask: Task<Void, Never>?
 
     public init() {}
 
@@ -71,173 +68,84 @@ public final class TranscriptionService {
     }
 
     private func startAsync() async {
-        // Speech authorization (NSSpeechRecognitionUsageDescription must be in the plist).
+        // Speech authorization (NSSpeechRecognitionUsageDescription must be in the plist). Mic
+        // capture itself is LiveKit's (already TCC-prompted for voice at join) — no second grant.
         let speechStatus = await Self.requestSpeechAuthorization()
         guard speechStatus == .authorized else {
             AppLog.error("transcription: speech authorization status=\(speechStatus.rawValue)")
             state = .unavailable("Speech recognition not authorized")
             return
         }
-        // Mic access for the tap (usually already granted for LiveKit voice).
-        guard await Self.ensureMicAccess() else {
-            AppLog.error("transcription: mic access denied")
-            state = .unavailable("Microphone access denied")
-            return
-        }
-        let recognizer = SFSpeechRecognizer()
-        guard let recognizer, recognizer.isAvailable else {
-            AppLog.error("transcription: recognizer unavailable")
-            state = .unavailable("Speech recognizer unavailable")
-            return
-        }
-        self.recognizer = recognizer
         do {
             try startPipeline()
             state = .running
-            AppLog.info("transcription started (onDevice=\(recognizer.supportsOnDeviceRecognition))")
         } catch {
             AppLog.error("transcription start failed: \(String(describing: error))")
             state = .unavailable("Transcription failed to start")
         }
     }
 
-    /// Build and start the engine + request + recognition task. The engine is intentionally plain:
-    /// no voice processing (AEC/AGC belong to LiveKit's own capture pipeline).
+    /// Build the recognition stream and start the track-attach loop.
     private func startPipeline() throws {
-        guard let recognizer else { return }
-        let engine = AVAudioEngine()
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        if recognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true
+        guard let stream = SpeechRecognitionStream() else {
+            AppLog.error("transcription: recognizer unavailable")
+            throw PipelineError.recognizerUnavailable
         }
-        if #available(macOS 13, *) {
-            request.addsPunctuation = true
+        stream.onSegment = { [weak self] segmentID, text, startTime, isFinal in
+            self?.onSegment?(segmentID, text, startTime, isFinal)
         }
+        stream.onEnded = { [weak self] reason in
+            guard let self, self.state == .running else { return }
+            self.state = .unavailable(reason)
+            self.teardownPipeline()
+        }
+        stream.start()
+        self.stream = stream
+        self.renderer = SpeechBufferRenderer(stream: stream)
+        startAttachLoop()
+        AppLog.info("transcription started (onDevice=\(stream.supportsOnDeviceRecognition))")
+    }
 
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        // An invalid input format (0 Hz / 0 channels — no usable input device, or the device is
-        // exclusively held) makes installTap throw an unrecoverable NSException, not a Swift error.
-        // Guard it into the designed soft-failure instead.
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            throw PipelineError.invalidInputFormat
-        }
-        // The tap block fires on a realtime audio thread, never the main actor — @Sendable so it
-        // can't inherit this class's @MainActor isolation (same SIGTRAP class as the recognition
-        // callbacks). `request.append` is thread-safe and the request outlives the tap (removed in
-        // teardown), so the nonisolated(unsafe) shared reference is sound.
-        nonisolated(unsafe) let tappedRequest = request
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable buffer, _ in
-            tappedRequest.append(buffer)
-        }
-
-        engine.prepare()
-        try engine.start()
-
-        // The handler fires on Speech's own queue, NEVER the main actor — it MUST be @Sendable so
-        // it doesn't inherit this class's @MainActor isolation (an inherited-isolation closure
-        // called off-main trips the Swift 6 runtime executor check → SIGTRAP; this crashed the app
-        // in the wild via the sibling authorization callback). Extract the Sendable bits, then hop.
-        recognitionTask = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
-            let text = result?.bestTranscription.formattedString
-            let isFinal = result?.isFinal ?? false
-            let errorDescription = error.map { String(describing: $0) }
-            Task { @MainActor [weak self] in
-                self?.handleRecognition(text: text, isFinal: isFinal, errorDescription: errorDescription)
+    /// Keep the renderer attached to the CURRENT local mic track: the track doesn't exist until
+    /// the mic is first enabled, and its identity changes on republish, so a 2 s reconcile loop
+    /// (same pattern as `RemoteTranscriptionManager`) beats one-shot attachment.
+    private func startAttachLoop() {
+        attachTask?.cancel()
+        attachTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                await self?.reconcileTrack()
+                try? await Task.sleep(for: .seconds(2))
             }
         }
+    }
 
-        self.engine = engine
-        self.request = request
-        mintNewSegment(startedAt: Date().timeIntervalSince1970)
-        startPartialFlushLoop()
+    private func reconcileTrack() async {
+        guard state == .running, let renderer, let provider = localAudioTrack else { return }
+        let track = await provider()
+        guard track !== attachedTrack else { return }
+        attachedTrack?.remove(audioRenderer: renderer)
+        attachedTrack = track
+        if let track {
+            track.add(audioRenderer: renderer)
+            AppLog.info("transcription attached to local mic track")
+        }
     }
 
     private func teardownPipeline() {
-        partialFlushTask?.cancel()
-        partialFlushTask = nil
-        pendingPartial = nil
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        request?.endAudio()
-        request = nil
-        if let engine {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
+        attachTask?.cancel()
+        attachTask = nil
+        if let renderer, let attachedTrack {
+            attachedTrack.remove(audioRenderer: renderer)
         }
-        engine = nil
-    }
-
-    // MARK: - Recognition results
-
-    private func handleRecognition(text: String?, isFinal: Bool, errorDescription: String?) {
-        if let errorDescription {
-            AppLog.error("transcription task error: \(errorDescription)")
-            // Tasks are not immortal (server-based ones are killed after ~a minute): restart the
-            // pipeline while we're supposed to be running — rate-limited against hot loops.
-            if state == .running { restartPipeline() }
-            return
-        }
-        guard state == .running, let text, !text.isEmpty else { return }
-        if isFinal {
-            pendingPartial = nil
-            emit(segmentID: currentSegmentID, text: text, startTime: currentSegmentStart, isFinal: true)
-            mintNewSegment(startedAt: Date().timeIntervalSince1970)
-        } else {
-            pendingPartial = text
-        }
-    }
-
-    private func restartPipeline() {
-        let now = Date().timeIntervalSince1970
-        guard now - lastRestartAt > 2 else {
-            AppLog.error("transcription: restarting too fast — giving up")
-            state = .unavailable("Transcription repeatedly failed")
-            teardownPipeline()
-            return
-        }
-        lastRestartAt = now
-        teardownPipeline()
-        do {
-            try startPipeline()
-            AppLog.info("transcription restarted after task error")
-        } catch {
-            AppLog.error("transcription restart failed: \(String(describing: error))")
-            state = .unavailable("Transcription stopped")
-        }
-    }
-
-    // MARK: - Emission
-
-    private func mintNewSegment(startedAt: TimeInterval) {
-        currentSegmentID = UUID()
-        currentSegmentStart = startedAt
-    }
-
-    /// ~300 ms latest-wins partial flush: only the newest partial text is emitted per window.
-    private func startPartialFlushLoop() {
-        partialFlushTask?.cancel()
-        partialFlushTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                guard let self, !Task.isCancelled else { return }
-                if let text = self.pendingPartial {
-                    self.pendingPartial = nil
-                    self.emit(segmentID: self.currentSegmentID, text: text,
-                              startTime: self.currentSegmentStart, isFinal: false)
-                }
-            }
-        }
-    }
-
-    private func emit(segmentID: UUID, text: String, startTime: TimeInterval, isFinal: Bool) {
-        onSegment?(segmentID, text, startTime, isFinal)
+        attachedTrack = nil
+        renderer = nil
+        stream?.stop()
+        stream = nil
     }
 
     // MARK: - Authorization helpers
 
-    private static func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
+    static func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
         await withCheckedContinuation { cont in
             // TCC invokes this on its own XPC reply queue, never the main actor. Without @Sendable
             // the closure inherits this type's @MainActor isolation and the Swift 6 runtime's
@@ -246,14 +154,6 @@ public final class TranscriptionService {
             SFSpeechRecognizer.requestAuthorization { @Sendable status in
                 cont.resume(returning: status)
             }
-        }
-    }
-
-    private static func ensureMicAccess() async -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized: return true
-        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
-        default: return false
         }
     }
 }
