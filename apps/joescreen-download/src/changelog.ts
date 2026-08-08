@@ -14,6 +14,15 @@ export interface Release {
 // Newest first.
 export const RELEASES: Release[] = [
 	{
+		version: "0.2.1",
+		date: "2026-08-07",
+		tag: "early beta",
+		highlights: [
+			"Fix: enabling Transcribe crashed the app for first-time users (Speech permission callback)",
+			"Transcription now fails soft (with a visible reason) when no usable microphone input exists",
+		],
+	},
+	{
 		version: "0.2.0",
 		date: "2026-08-06",
 		tag: "early beta",

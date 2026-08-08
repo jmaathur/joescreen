@@ -7,6 +7,18 @@ The user-facing highlights from each version are also shown in the "What's new" 
 [joescreen.cheffing.dev](https://joescreen.cheffing.dev) — keep that section (in
 `apps/joescreen-download/src/changelog.ts`) in sync with the entries here when you cut a release.
 
+## [0.2.1] — 2026-08-07 · early beta
+
+### Fixed
+- **Crash when enabling transcription** — tapping Transcribe crashed the app for anyone who hadn't
+  previously granted Speech Recognition permission: the Speech framework's authorization (and
+  recognition) callbacks fire on their own system queues, but inherited the service's main-actor
+  isolation, tripping the Swift 6 runtime's executor assertion (SIGTRAP). All Speech/audio-tap
+  callbacks are now explicitly `@Sendable`, and an invalid microphone input format now fails soft
+  (transcription unavailable) instead of raising an uncatchable exception.
+
+[0.2.1]: https://joescreen.cheffing.dev
+
 ## [0.2.0] — 2026-08-06 · early beta
 
 Live transcripts, smarter same-room audio, and a big batch of sharing/permission fixes. Also the

@@ -20,6 +20,11 @@ import AVFoundation
 @Observable
 public final class TranscriptionService {
 
+    /// Failures in engine/tap setup that must fail SOFT (state → .unavailable), never crash.
+    enum PipelineError: Error {
+        case invalidInputFormat
+    }
+
     public enum State: Equatable {
         case off
         case running
@@ -112,19 +117,29 @@ public final class TranscriptionService {
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        // The tap block fires on a realtime audio thread; `request.append` is thread-safe and the
-        // request outlives the tap (removed in teardown), so the shared reference is sound.
+        // An invalid input format (0 Hz / 0 channels — no usable input device, or the device is
+        // exclusively held) makes installTap throw an unrecoverable NSException, not a Swift error.
+        // Guard it into the designed soft-failure instead.
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw PipelineError.invalidInputFormat
+        }
+        // The tap block fires on a realtime audio thread, never the main actor — @Sendable so it
+        // can't inherit this class's @MainActor isolation (same SIGTRAP class as the recognition
+        // callbacks). `request.append` is thread-safe and the request outlives the tap (removed in
+        // teardown), so the nonisolated(unsafe) shared reference is sound.
         nonisolated(unsafe) let tappedRequest = request
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable buffer, _ in
             tappedRequest.append(buffer)
         }
 
         engine.prepare()
         try engine.start()
 
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            // The handler fires on an arbitrary queue and the result is not Sendable — extract the
-            // Sendable bits here, then hop to the main actor.
+        // The handler fires on Speech's own queue, NEVER the main actor — it MUST be @Sendable so
+        // it doesn't inherit this class's @MainActor isolation (an inherited-isolation closure
+        // called off-main trips the Swift 6 runtime executor check → SIGTRAP; this crashed the app
+        // in the wild via the sibling authorization callback). Extract the Sendable bits, then hop.
+        recognitionTask = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
             let text = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal ?? false
             let errorDescription = error.map { String(describing: $0) }
@@ -224,7 +239,11 @@ public final class TranscriptionService {
 
     private static func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
         await withCheckedContinuation { cont in
-            SFSpeechRecognizer.requestAuthorization { status in
+            // TCC invokes this on its own XPC reply queue, never the main actor. Without @Sendable
+            // the closure inherits this type's @MainActor isolation and the Swift 6 runtime's
+            // executor assertion crashes the app (dispatch_assert_queue_fail → SIGTRAP) the first
+            // time a user with fresh TCC state taps Transcribe. Continuations are thread-safe.
+            SFSpeechRecognizer.requestAuthorization { @Sendable status in
                 cont.resume(returning: status)
             }
         }
