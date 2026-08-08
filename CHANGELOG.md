@@ -7,6 +7,21 @@ The user-facing highlights from each version are also shown in the "What's new" 
 [joescreen.cheffing.dev](https://joescreen.cheffing.dev) — keep that section (in
 `apps/joescreen-download/src/changelog.ts`) in sync with the entries here when you cut a release.
 
+## [0.3.1] — 2026-08-07 · early beta
+
+### Fixed
+- **Transcription produced no text in 0.3.0** — two independent breakers, both fixed:
+  1. Call audio arrives as Int16 PCM, which Apple's speech recognizer silently ignores (no text,
+     no error). All recognition audio is now converted to Float32.
+  2. Apple's buffer-based recognition delivers NO results — not even partials — until the audio
+     stream is explicitly ended. Live calls never end their audio, so nothing could ever appear.
+     Transcription now segments utterances with a lightweight energy gate: ~1 s of trailing
+     silence (or 12 s of continuous speech) flushes the recognizer and text appears per utterance.
+- Field diagnostics: a 5 s input-level heartbeat in the logs, and env-gated capture of the exact
+  audio fed to the recognizer (`JOESCREEN_DUMP_SPEECH_AUDIO=1`).
+
+[0.3.1]: https://joescreen.cheffing.dev
+
 ## [0.3.0] — 2026-08-07 · early beta
 
 ### New

@@ -4,12 +4,21 @@ import AVFoundation
 import LiveKit
 
 /// One Apple-Speech recognition stream over an externally-fed PCM buffer source: the per-speaker
-/// unit of the transcript pipeline. The LOCAL path feeds it from an `AVAudioEngine` input tap
+/// unit of the transcript pipeline. The LOCAL path feeds it from LiveKit's own mic capture
 /// (`TranscriptionService`); the REMOTE path feeds it from a LiveKit `AudioRenderer` per remote
 /// participant (`RemoteTranscriptionManager`). Owns the request/task lifecycle, utterance identity
 /// (partials + final share a `segmentID`), the ~300 ms latest-wins partial throttle, and the
-/// task-death restart loop (server-based tasks die ~1/minute; restarts are rate-limited and the
-/// stream reports `onEnded` instead of hot-looping).
+/// task-death restart loop (restarts are rate-limited and the stream reports `onEnded` instead of
+/// hot-looping).
+///
+/// **Utterance segmentation is load-bearing** (verified empirically on macOS 15.6):
+/// `SFSpeechAudioBufferRecognitionRequest` delivers NO results — not even partials — until
+/// `endAudio()` is called; an endless live stream therefore produces literally nothing (plus
+/// periodic 1110 "no speech" task deaths). So this stream runs its own energy VAD on the flush
+/// loop: once speech has been heard and then ~1 s of trailing silence, it ends the current
+/// request's audio → the recognizer flushes partials + the final in one burst → the final rotates
+/// to a fresh request/task for the next utterance. A max-utterance cap forces a flush during long
+/// monologues so text keeps appearing.
 ///
 /// Buffers arrive on realtime/audio threads; `append` is nonisolated and routes through a
 /// lock-guarded box holding the CURRENT request, so a mid-restart swap never races the audio thread.
@@ -39,6 +48,23 @@ final class SpeechRecognitionStream {
     private var partialFlushTask: Task<Void, Never>?
     /// Restart guard: don't rebuild the task faster than this after an error (hot-loop protection).
     private var lastRestartAt: TimeInterval = 0
+
+    // MARK: Utterance segmentation (energy VAD driven from the flush loop's 300 ms ticks)
+
+    /// A tick whose peak exceeds this counts as speech. Converted Float32 samples; normal speech
+    /// registers well above (0.05+), room tone below.
+    private static let speechPeakThreshold: Float = 0.015
+    /// Trailing silence that ends an utterance and flushes the recognizer.
+    private static let utteranceSilenceSeconds: TimeInterval = 1.0
+    /// Force a flush after this much continuous speech so long monologues still produce text.
+    private static let maxUtteranceSeconds: TimeInterval = 12
+    /// Whether speech has been heard on the CURRENT request (nothing to flush before that).
+    private var sawSpeechThisUtterance = false
+    /// When speech was last heard / when the current request's task started.
+    private var lastSpeechAt: TimeInterval = 0
+    private var taskStartedAt: TimeInterval = 0
+    /// True once endAudio() was called on the current request (awaiting the flush + final).
+    private var audioEnded = false
 
     /// nil when the current locale has no speech recognizer.
     init?() {
@@ -83,6 +109,10 @@ final class SpeechRecognitionStream {
         request.addsPunctuation = true
         requestBox.set(request)
         mintNewSegment(startedAt: Date().timeIntervalSince1970)
+        // Fresh request → fresh utterance state for the VAD.
+        sawSpeechThisUtterance = false
+        audioEnded = false
+        taskStartedAt = Date().timeIntervalSince1970
 
         // The handler fires on Speech's own queue, NEVER the main actor — it MUST be @Sendable so
         // it doesn't inherit @MainActor isolation (an inherited-isolation closure called off-main
@@ -135,7 +165,10 @@ final class SpeechRecognitionStream {
         if isFinal {
             pendingPartial = nil
             emit(segmentID: currentSegmentID, text: text, startTime: currentSegmentStart, isFinal: true)
-            mintNewSegment(startedAt: Date().timeIntervalSince1970)
+            // The final ends this request's life (its audio was ended to force the flush — see the
+            // VAD in the flush loop). Rotate to a fresh request/task for the next utterance.
+            teardownTask()
+            startTask()
         } else {
             pendingPartial = text
         }
@@ -173,14 +206,16 @@ final class SpeechRecognitionStream {
         currentSegmentStart = startedAt
     }
 
-    /// ~300 ms latest-wins partial flush: only the newest partial text is emitted per window.
-    /// Doubles as the input-level heartbeat: every ~5 s, log the peak sample level seen since the
-    /// last heartbeat — the one-line diagnostic that separates "recognizer ignoring speech" from
-    /// "audio path is feeding silence/nothing" (buffers=0 means append was never called at all).
+    /// The ~300 ms tick loop: flushes throttled partials, runs the utterance VAD (the thing that
+    /// actually makes results appear — see the type doc), and logs an input-level heartbeat every
+    /// ~5 s (`peak=`/`buffers=` — the diagnostic separating "recognizer ignoring speech" from
+    /// "audio path is feeding silence/nothing"; buffers=0 means append was never called at all).
     private func startPartialFlushLoop() {
         partialFlushTask?.cancel()
         partialFlushTask = Task { @MainActor [weak self] in
             var ticks = 0
+            var heartbeatPeak: Float = 0
+            var heartbeatBuffers = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 guard let self, !Task.isCancelled else { return }
@@ -189,12 +224,36 @@ final class SpeechRecognitionStream {
                     self.emit(segmentID: self.currentSegmentID, text: text,
                               startTime: self.currentSegmentStart, isFinal: false)
                 }
+                let m = self.requestBox.readAndResetMeter()
+                self.evaluateUtterance(tickPeak: m.peak)
+                heartbeatPeak = max(heartbeatPeak, m.peak)
+                heartbeatBuffers += m.buffers
                 ticks += 1
                 if ticks % 17 == 0 {
-                    let m = self.requestBox.readAndResetMeter()
-                    AppLog.info("speech stream level: peak=\(String(format: "%.4f", m.peak)) buffers=\(m.buffers)")
+                    AppLog.info("speech stream level: peak=\(String(format: "%.4f", heartbeatPeak)) buffers=\(heartbeatBuffers)")
+                    heartbeatPeak = 0
+                    heartbeatBuffers = 0
                 }
             }
+        }
+    }
+
+    /// One VAD step: track speech energy; after speech + trailing silence (or an over-long
+    /// utterance), end the current request's audio so the recognizer flushes its results. The
+    /// resulting final rotates the task; a silence-only request just 1110s and rolls over.
+    private func evaluateUtterance(tickPeak: Float) {
+        guard recognitionTask != nil, !audioEnded else { return }
+        let now = Date().timeIntervalSince1970
+        if tickPeak > Self.speechPeakThreshold {
+            sawSpeechThisUtterance = true
+            lastSpeechAt = now
+        }
+        guard sawSpeechThisUtterance else { return }
+        let trailingSilence = now - lastSpeechAt
+        let utteranceAge = now - taskStartedAt
+        if trailingSilence >= Self.utteranceSilenceSeconds || utteranceAge >= Self.maxUtteranceSeconds {
+            audioEnded = true
+            requestBox.endAudio()
         }
     }
 
@@ -232,6 +291,19 @@ private final class RequestBox: @unchecked Sendable {
     /// Peak |sample| + buffer count since the last meter read (the level heartbeat's source).
     private var meterPeak: Float = 0
     private var meterBuffers: Int = 0
+    /// Converter to Float32 mono. LiveKit's WebRTC render path delivers Int16 PCM buffers —
+    /// `SFSpeechAudioBufferRecognitionRequest.append` silently produces NOTHING for those (endless
+    /// "no speech detected", zero partials, no error anywhere), and Int16 also defeats float-based
+    /// metering (`floatChannelData == nil` → a phantom peak=0.0000). Convert EVERYTHING to the
+    /// recognizer-native Float32 before appending. Rebuilt when the input format changes.
+    private var converter: AVAudioConverter?
+    private var converterInputFormat: AVAudioFormat?
+    private var loggedFormat = false
+    /// Debug tap (JOESCREEN_DUMP_SPEECH_AUDIO=1): writes the exact converted audio the recognizer
+    /// receives to a wav in /tmp, so "recognizer got garbage" vs "recognizer ignored good audio"
+    /// is decidable by listening to / file-recognizing the dump.
+    private var debugFile: AVAudioFile?
+    private var debugFileTried = false
 
     func set(_ new: SFSpeechAudioBufferRecognitionRequest?) {
         lock.lock()
@@ -241,10 +313,34 @@ private final class RequestBox: @unchecked Sendable {
         old?.endAudio()
     }
 
+    /// End the CURRENT request's audio (the utterance-VAD flush trigger) without swapping it out —
+    /// the recognizer then delivers its buffered results + final for this request.
+    func endAudio() {
+        lock.lock()
+        let current = request
+        lock.unlock()
+        current?.endAudio()
+    }
+
     func append(_ buffer: AVAudioPCMBuffer) {
+        if !loggedFormat {
+            loggedFormat = true
+            AppLog.info("speech stream input format: \(buffer.format)")
+        }
+        guard let converted = convertToFloat32Mono(buffer) else { return }
+        if !debugFileTried {
+            debugFileTried = true
+            if ProcessInfo.processInfo.environment["JOESCREEN_DUMP_SPEECH_AUDIO"] == "1" {
+                let path = "/tmp/js-speech-\(UInt32.random(in: 1000...9999)).wav"
+                debugFile = try? AVAudioFile(forWriting: URL(fileURLWithPath: path),
+                                             settings: converted.format.settings)
+                AppLog.info("speech stream: dumping recognizer audio to \(path)")
+            }
+        }
+        try? debugFile?.write(from: converted)
         var peak: Float = 0
-        if let data = buffer.floatChannelData, buffer.frameLength > 0 {
-            for frame in 0..<Int(buffer.frameLength) {
+        if let data = converted.floatChannelData, converted.frameLength > 0 {
+            for frame in 0..<Int(converted.frameLength) {
                 let v = abs(data[0][frame])
                 if v > peak { peak = v }
             }
@@ -254,7 +350,41 @@ private final class RequestBox: @unchecked Sendable {
         meterBuffers += 1
         let current = request
         lock.unlock()
-        current?.append(buffer)
+        current?.append(converted)
+    }
+
+    /// Convert an arbitrary PCM buffer to deinterleaved Float32 mono at the same sample rate.
+    /// Returns the buffer unchanged when it's already in that shape. Called only from the single
+    /// audio/render thread that feeds this stream, so converter state needs no extra locking.
+    private func convertToFloat32Mono(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        let inFormat = buffer.format
+        if inFormat.commonFormat == .pcmFormatFloat32, inFormat.channelCount == 1, !inFormat.isInterleaved {
+            return buffer
+        }
+        if converter == nil || converterInputFormat != inFormat {
+            guard let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                                sampleRate: inFormat.sampleRate,
+                                                channels: 1, interleaved: false),
+                  let newConverter = AVAudioConverter(from: inFormat, to: outFormat) else { return nil }
+            converter = newConverter
+            converterInputFormat = inFormat
+        }
+        guard let converter,
+              let out = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
+                                         frameCapacity: buffer.frameLength) else { return nil }
+        // Same sample rate in/out → one buffer in, one buffer out; the block feeds the input once.
+        nonisolated(unsafe) var consumed = false
+        var error: NSError?
+        converter.convert(to: out, error: &error) { _, outStatus in
+            if consumed {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            consumed = true
+            outStatus.pointee = .haveData
+            return buffer
+        }
+        return error == nil ? out : nil
     }
 
     func readAndResetMeter() -> (peak: Float, buffers: Int) {

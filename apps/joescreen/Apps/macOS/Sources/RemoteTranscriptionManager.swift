@@ -61,9 +61,14 @@ final class RemoteTranscriptionManager {
 
     /// One reconcile step: streams exist exactly for (current remote audio tracks) minus
     /// (suppressed speakers); a changed track identity (republish) rebuilds the stream.
+    private var loggedEmptyTracks = false
     private func reconcile() async {
         guard let transport else { return }
         let tracks = await transport.remoteAudioTracksByParticipant()
+        if tracks.isEmpty, !loggedEmptyTracks {
+            loggedEmptyTracks = true
+            AppLog.info("remote transcription: no subscribed remote audio tracks yet")
+        }
 
         for speaker in entries.keys where tracks[speaker] == nil || isSuppressed?(speaker) == true {
             detach(speaker)
@@ -79,7 +84,10 @@ final class RemoteTranscriptionManager {
     }
 
     private func attach(_ speaker: ParticipantID, track: RemoteAudioTrack) {
-        guard let stream = SpeechRecognitionStream() else { return } // no recognizer — nothing to do
+        guard let stream = SpeechRecognitionStream() else {
+            AppLog.error("remote transcription: no speech recognizer available for \(speaker)")
+            return
+        }
         stream.onSegment = { [weak self] segmentID, text, startTime, isFinal in
             guard let self else { return }
             // Belt-and-braces: suppression may have flipped between poll ticks.

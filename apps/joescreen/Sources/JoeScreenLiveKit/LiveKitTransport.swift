@@ -269,6 +269,7 @@ public actor LiveKitTransport: MediaTransport {
         room.add(delegate: observer)
 
         // R24: selective subscription is load-bearing correctness, not optimization — set BOTH true.
+        let processing = !Self.voiceProcessingDisabledForTesting
         let roomOptions = RoomOptions(
             // Explicit AEC/AGC/NS (+ high-pass) so the intent is pinned and verified rather than
             // inherited from SDK defaults. On macOS (and iOS device) the heavy lifting — acoustic
@@ -277,10 +278,10 @@ public actor LiveKitTransport: MediaTransport {
             // software APM (used on the iOS Simulator) and are reported to the server as audio
             // track features.
             defaultAudioCaptureOptions: AudioCaptureOptions(
-                echoCancellation: true,
-                autoGainControl: true,
-                noiseSuppression: true,
-                highpassFilter: true),
+                echoCancellation: processing,
+                autoGainControl: processing,
+                noiseSuppression: processing,
+                highpassFilter: processing),
             adaptiveStream: true,
             dynacast: true)
 
@@ -449,10 +450,24 @@ public actor LiveKitTransport: MediaTransport {
     /// mic device and needs `NSMicrophoneUsageDescription` + mic TCC.
     public func setMicrophone(enabled: Bool) async throws {
         #if os(macOS)
-        if enabled { Self.ensureVoiceProcessing() }
+        if enabled {
+            if Self.voiceProcessingDisabledForTesting {
+                let audio = AudioManager.shared
+                if audio.isVoiceProcessingEnabled { try? audio.setVoiceProcessingEnabled(false) }
+            } else {
+                Self.ensureVoiceProcessing()
+            }
+        }
         #endif
         _ = try await room.localParticipant.setMicrophone(enabled: enabled)
     }
+
+    /// TEST-ONLY escape hatch (`JOESCREEN_DISABLE_AEC=1`): turn off VoiceProcessingIO + APM so
+    /// SPEAKER-PLAYED audio survives into capture. Single-machine automation can't produce an
+    /// acoustic voice, and AEC (correctly) cancels everything a test can synthesize — this is the
+    /// only way to drive real speech through the full pipeline unattended. Never set in production.
+    static let voiceProcessingDisabledForTesting =
+        ProcessInfo.processInfo.environment["JOESCREEN_DISABLE_AEC"] == "1"
 
     #if os(macOS)
     /// Ensure Apple's VoiceProcessingIO (VPIO) is active before capture starts. On macOS, VPIO —

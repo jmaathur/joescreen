@@ -14,6 +14,15 @@ export interface Release {
 // Newest first.
 export const RELEASES: Release[] = [
 	{
+		version: "0.3.1",
+		date: "2026-08-07",
+		tag: "early beta",
+		highlights: [
+			"Fix: transcription produced no text in 0.3.0 (recognizer ignored the call's Int16 audio, and results only flush at utterance boundaries — both fixed)",
+			"Captions now appear per utterance, ~1 second after each speaker pauses",
+		],
+	},
+	{
 		version: "0.3.0",
 		date: "2026-08-07",
 		tag: "early beta",
