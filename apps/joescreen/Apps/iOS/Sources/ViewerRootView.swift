@@ -35,6 +35,16 @@ struct ViewerRootView: View {
             }
         case .inCall:
             InCallView()
+        case .ended:
+            VStack(spacing: 12) {
+                Image(systemName: "phone.down.fill")
+                    .font(.largeTitle).foregroundStyle(.secondary)
+                Text("Call ended").font(.headline)
+                Text("This session is no longer active.")
+                    .foregroundStyle(.secondary)
+                Button("Join Another Call") { model.showJoinSheet = true }
+                    .buttonStyle(.borderedProminent)
+            }
         case .failed(let message):
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -178,12 +188,30 @@ struct ZoomableVideoPane: View {
     @Environment(ViewerModel.self) private var model
     let window: WindowID
     let track: RemoteVideoTrackRef
+    @State private var pictureInPictureRequested = false
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             Color.black
-            // SwiftUIVideoView on iOS has pinch-zoom / pan built in.
-            SwiftUIVideoView(track, layoutMode: .fit, pinchToZoomOptions: [.zoomIn, .zoomOut, .resetOnRelease])
+            SystemPictureInPictureVideoView(
+                track: track,
+                isRequested: $pictureInPictureRequested)
+            Button {
+                pictureInPictureRequested.toggle()
+            } label: {
+                Image(systemName: pictureInPictureRequested ? "pip.exit" : "pip.enter")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 44, height: 44)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!SystemPictureInPictureVideoView.isSupported)
+            .opacity(SystemPictureInPictureVideoView.isSupported ? 1 : 0.45)
+            .accessibilityLabel(pictureInPictureRequested ? "Stop Picture in Picture" : "Start Picture in Picture")
+            .accessibilityHint(SystemPictureInPictureVideoView.isSupported
+                               ? "Keeps this shared screen visible outside JoeScreen"
+                               : "Picture in Picture is unavailable on this device")
+            .padding(12)
         }
         .overlay(
             Rectangle().strokeBorder(model.color(for: model.owner(of: window)), lineWidth: 3))

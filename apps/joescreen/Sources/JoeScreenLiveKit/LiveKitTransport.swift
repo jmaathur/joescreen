@@ -283,7 +283,11 @@ public actor LiveKitTransport: MediaTransport {
                 noiseSuppression: processing,
                 highpassFilter: processing),
             adaptiveStream: true,
-            dynacast: true)
+            dynacast: true,
+            // Native video-call PiP is a legitimate background camera consumer. Keep the SDK from
+            // automatically muting local video as the app resigns active; CameraCapturer's
+            // multitasking-access flag below lets supported devices continue the capture session.
+            suspendLocalVideoTracksInBackground: false)
 
         updateState(.connecting)
         do {
@@ -341,6 +345,12 @@ public actor LiveKitTransport: MediaTransport {
 
     public nonisolated func connectionStates() -> AsyncStream<MediaConnectionState> {
         stateBroadcaster.stream()
+    }
+
+    /// Synchronous authoritative snapshot used when an app returns from suspension and needs to
+    /// reconcile connection events that may have been delayed while its main actor was inactive.
+    public nonisolated func currentConnectionState() -> MediaConnectionState {
+        stateBroadcaster.value
     }
 
     public func bindIdentity(_ participantID: ParticipantID, transportIdentity: String) async {
@@ -605,6 +615,16 @@ public actor LiveKitTransport: MediaTransport {
         }
         cameraPublication = try await room.localParticipant.setCamera(
             enabled: true, captureOptions: captureOptions)
+        #if os(iOS)
+        // iOS normally stops camera capture when the app backgrounds. Video-call PiP is the system
+        // sanctioned exception; enable multitasking camera access only when the active device says
+        // its AVCaptureSession supports it (for example, supported iPads and newer iPhones).
+        if let track = cameraPublication?.track as? LocalVideoTrack,
+           let capturer = track.capturer as? CameraCapturer,
+           capturer.isMultitaskingAccessSupported {
+            capturer.isMultitaskingAccessEnabled = true
+        }
+        #endif
     }
 
     /// The local webcam video track for a self-preview (`SwiftUIVideoView(track, mirrorMode: .mirror)`).
