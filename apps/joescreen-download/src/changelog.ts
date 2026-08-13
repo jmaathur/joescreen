@@ -20,6 +20,7 @@ export const RELEASES: Release[] = [
 		highlights: [
 			"Shared windows now carry their owner's name — window titles, share tiles, and the Focus menu all say whose window it is",
 			"iOS beta: calls keep running in the background, Picture-in-Picture, and clean call-end handling",
+			"Fix: the app now reports its real version — every earlier build claimed 0.1.0 in About and Finder",
 		],
 	},
 	{

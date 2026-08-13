@@ -17,6 +17,11 @@ The user-facing highlights from each version are also shown in the "What's new" 
 - Calls keep running when the app is backgrounded, Picture-in-Picture for shared windows, and
   call end is handled cleanly (no stuck sessions).
 
+### Fixed
+- **The app now reports its real version** — the generated Info.plist hardcoded
+  `CFBundleShortVersionString` to 0.1.0, so every earlier build (macOS and iOS) claimed 0.1.0 in
+  About, Finder, and crash reports regardless of the actual release.
+
 ## [0.3.1] — 2026-08-07 · early beta
 
 ### Fixed
