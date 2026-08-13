@@ -96,8 +96,8 @@ targets:
       properties:
         CFBundleName: JoeScreen
         CFBundleDisplayName: JoeScreen
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "21"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSMinimumSystemVersion: "14.0"
         # App icon set name (App Store validation requires the key explicitly, like iOS).
         CFBundleIconName: AppIcon
@@ -172,8 +172,8 @@ targets:
       properties:
         CFBundleName: JoeScreen
         CFBundleDisplayName: JoeScreen
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "21"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         # App Store category + export-compliance (same rationale as macOS above).
         LSApplicationCategoryType: "public.app-category.productivity"
         ITSAppUsesNonExemptEncryption: false
