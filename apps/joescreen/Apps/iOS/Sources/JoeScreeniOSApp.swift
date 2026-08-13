@@ -8,6 +8,7 @@ import JoeScreenKit
 @main
 struct JoeScreeniOSApp: App {
     @State private var model = ViewerModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -17,6 +18,9 @@ struct JoeScreeniOSApp: App {
                     if let params = DirectJoinParameters.fromURL(url) {
                         model.requestJoin(params)
                     }
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    if newPhase == .active { model.reconcileCallStateWhenActive() }
                 }
                 .task {
                     // DEBUG-only: auto-join from env so the simulator can be driven WITHOUT the

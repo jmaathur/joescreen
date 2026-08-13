@@ -14,7 +14,7 @@ import LiveKit
 @Observable
 public final class ViewerModel {
 
-    public enum Phase: Equatable { case idle, connecting, inCall, failed(String) }
+    public enum Phase: Equatable { case idle, connecting, inCall, ended, failed(String) }
 
     public private(set) var phase: Phase = .idle
     public private(set) var joinParameters: DirectJoinParameters?
@@ -50,6 +50,10 @@ public final class ViewerModel {
     private let transport = LiveKitTransport()
     private var stateChannel: (any WireDataChannel)?
     private var pumps: [Task<Void, Never>] = []
+    private var transportParticipants: Set<ParticipantID> = []
+    private var callEndDetector = CallEndDetector()
+    private var callEndGraceTask: Task<Void, Never>?
+    private static let callEndGraceNanoseconds: UInt64 = 2_000_000_000
 
     /// Observes LiveKit's broadcast state (ReplayKit start/stop) to publish/unpublish the screen share.
     private var broadcastCancellable: AnyCancellable?
@@ -71,6 +75,10 @@ public final class ViewerModel {
     // MARK: - Join
 
     public func requestJoin(_ params: DirectJoinParameters) {
+        callEndGraceTask?.cancel()
+        callEndGraceTask = nil
+        callEndDetector.reset()
+        transportParticipants = []
         joinParameters = params
         localParticipantID = params.participantID
         showJoinSheet = false
@@ -79,6 +87,13 @@ public final class ViewerModel {
     }
 
     public func leave() { Task { await teardown() } }
+
+    /// Reconcile state that may have changed while iOS suspended MainActor callbacks. LiveKit's
+    /// current room state and participant roster are authoritative when the scene becomes active.
+    public func reconcileCallStateWhenActive() {
+        guard phase == .connecting || phase == .inCall else { return }
+        Task { await reconcileActiveCall() }
+    }
 
     private func connect(_ params: DirectJoinParameters) async {
         // Resolve (token, SFU URL): DEBUG mints locally + dials the URL as-is; RELEASE fetches from the
@@ -103,6 +118,9 @@ public final class ViewerModel {
             guard let windowID = ShareTrackName.windowID(from: descriptor.trackName) else { return }
             Task { @MainActor in self?.addRemoteTrack(windowID: windowID, track: track) }
         }
+        await transport.setOnParticipantsChanged { [weak self] ids in
+            Task { @MainActor in await self?.applyParticipantSet(ids) }
+        }
         startConnectionPump()
 
         do {
@@ -114,6 +132,7 @@ public final class ViewerModel {
             // Voice: enable the mic on join unless the user chose to join muted.
             try? await transport.setMicrophone(enabled: !joinMuted)
             micEnabled = await transport.isMicrophoneEnabled()
+            _ = callEndDetector.observeConnection(.connected)
             phase = .inCall
             if let me = localParticipantID { participants.insert(me) }
         } catch {
@@ -121,7 +140,9 @@ public final class ViewerModel {
         }
     }
 
-    private func teardown() async {
+    private func teardown(finalPhase: Phase = .idle, presentJoinSheet: Bool = true) async {
+        callEndGraceTask?.cancel()
+        callEndGraceTask = nil
         for t in pumps { t.cancel() }
         pumps.removeAll()
         await transport.disconnect()
@@ -129,6 +150,7 @@ public final class ViewerModel {
         owners.removeAll()
         room = RoomModel()
         participants = []
+        transportParticipants = []
         localParticipantID = nil
         mediaState = .disconnected
         micEnabled = false
@@ -140,8 +162,9 @@ public final class ViewerModel {
         await transport.unpublishBroadcastScreenShare()
         broadcastWindowID = nil
         screenShareEnabled = false
-        phase = .idle
-        showJoinSheet = true
+        stateChannel = nil
+        phase = finalPhase
+        showJoinSheet = presentJoinSheet
     }
 
     // MARK: - Mic + camera toggles (mirrors the desktop control bar)
@@ -243,10 +266,84 @@ public final class ViewerModel {
         let stream = transport.connectionStates()
         pumps.append(Task { @MainActor [weak self] in
             for await state in stream {
-                self?.mediaState = state
-                if case .failed(let r) = state { self?.phase = .failed(r) }
+                guard let self else { continue }
+                await self.applyConnectionState(state)
             }
         })
+    }
+
+    private func applyConnectionState(_ state: MediaConnectionState) async {
+        mediaState = state
+        if callEndDetector.observeConnection(state) {
+            await teardown(finalPhase: .ended, presentJoinSheet: false)
+            return
+        }
+        // Participant and connection callbacks take separate hops to MainActor, so their delivery
+        // order is not guaranteed. Always read the authoritative roster after (re)connecting; this
+        // ensures an empty roster observed during `.reconnecting` is checked again once connected.
+        if state == .connected {
+            await applyParticipantSet(await transport.currentParticipantIDs())
+        }
+        // A failure before the room ever connected is a join failure, not a call that ended.
+        if case .failed(let reason) = state { phase = .failed(reason) }
+    }
+
+    private func applyParticipantSet(_ ids: Set<ParticipantID>) async {
+        let departed = transportParticipants.subtracting(ids)
+        transportParticipants = ids
+        for participantID in departed {
+            room.pruneParticipant(participantID)
+            for (windowID, ownerID) in owners where ownerID == participantID {
+                remoteTracks[windowID] = nil
+                owners[windowID] = nil
+            }
+        }
+        recomputeParticipants()
+
+        if hasRemoteParticipant(in: ids) {
+            callEndGraceTask?.cancel()
+            callEndGraceTask = nil
+        } else if callEndDetector.observeParticipants(ids, localParticipantID: localParticipantID) {
+            scheduleCallEndConfirmation()
+        }
+    }
+
+    private func scheduleCallEndConfirmation() {
+        callEndGraceTask?.cancel()
+        callEndGraceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.callEndGraceNanoseconds)
+            guard !Task.isCancelled, let self else { return }
+            await self.confirmCallEnded()
+        }
+    }
+
+    private func confirmCallEnded() async {
+        guard phase == .connecting || phase == .inCall else { return }
+        let state = transport.currentConnectionState()
+        if callEndDetector.observeConnection(state) {
+            await teardown(finalPhase: .ended, presentJoinSheet: false)
+            return
+        }
+        guard state == .connected else { return }
+        let ids = await transport.currentParticipantIDs()
+        if hasRemoteParticipant(in: ids) {
+            await applyParticipantSet(ids)
+            return
+        }
+        await teardown(finalPhase: .ended, presentJoinSheet: false)
+    }
+
+    private func reconcileActiveCall() async {
+        guard phase == .connecting || phase == .inCall else { return }
+        let state = transport.currentConnectionState()
+        await applyConnectionState(state)
+        guard phase == .connecting || phase == .inCall else { return }
+        await applyParticipantSet(await transport.currentParticipantIDs())
+    }
+
+    private func hasRemoteParticipant(in ids: Set<ParticipantID>) -> Bool {
+        guard let localParticipantID else { return !ids.isEmpty }
+        return ids.contains { $0 != localParticipantID }
     }
 
     private func startStatePump(_ channel: any WireDataChannel) {
@@ -272,14 +369,19 @@ public final class ViewerModel {
     private func applyRoom(_ newRoom: RoomModel) {
         room = newRoom
         for (win, owner) in newRoom.shares { owners[win] = owner }
-        var roster = Set(newRoom.shares.values)
-        if let me = localParticipantID { roster.insert(me) }
-        participants.formUnion(roster)
+        recomputeParticipants()
         // Drop tracks whose share disappeared.
         for win in remoteTracks.keys where newRoom.owner(of: win) == nil {
             remoteTracks[win] = nil
             owners[win] = nil
         }
+    }
+
+    private func recomputeParticipants() {
+        var roster = transportParticipants
+        roster.formUnion(room.shares.values)
+        if let me = localParticipantID { roster.insert(me) }
+        participants = roster
     }
 
     private func addRemoteTrack(windowID: WindowID, track: RemoteVideoTrackRef) {

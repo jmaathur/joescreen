@@ -188,6 +188,14 @@ targets:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
         UILaunchScreen: {}
+        # "Audio, AirPlay, and Picture in Picture" is a single iOS background capability whose
+        # Info.plist value is `audio`. LiveKit keeps an active `.playback` / `.playAndRecord` audio
+        # session for subscribed/published call audio, which lets the call and signaling continue
+        # when JoeScreen is backgrounded. Native video-call PiP uses this same capability.
+        # Do not add `voip`: that mode is for PushKit/CallKit incoming-call handling, which this app
+        # does not implement.
+        UIBackgroundModes:
+          - audio
         # iPad multitasking requires ALL FOUR orientations (Apple validation rejects a partial set).
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
