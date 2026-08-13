@@ -178,7 +178,7 @@ final class RemoteWindowManager {
     }
 
     private func titleFor(_ remote: RemoteVideoWindow, model: AppModel) -> String {
-        let owner = model.shortLabel(for: remote.ownerID)
+        let owner = model.displayLabel(for: remote.ownerID)
         if let title = remote.title, !title.isEmpty {
             if let app = remote.appName, !app.isEmpty { return "\(title) — \(app) · \(owner)" }
             return "\(title) · \(owner)"

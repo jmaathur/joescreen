@@ -155,7 +155,7 @@ struct SharedWindowsCommands: Commands {
     }
 
     private func sharedItemTitle(_ entry: AppModel.SharedWindowEntry) -> String {
-        let owner = model.shortLabel(for: entry.owner)
+        let owner = model.displayLabel(for: entry.owner)
         let verb = model.isRemoteWindowClosed(entry.window) ? "Reopen" : "Focus"
         return "\(verb) Shared Window · \(owner)"
     }

@@ -32,7 +32,7 @@ public final class AppModel {
     public private(set) var joinParameters: DirectJoinParameters?
     public private(set) var localParticipantID: ParticipantID?
     /// The mirrored room state. On the sharer this is the authoritative copy it broadcasts; on a
-    /// joiner it's the last snapshot applied from the `state` channel (last-writer-wins on revision).
+    /// joiner it's the union-merge of every snapshot applied from the `state` channel.
     public private(set) var room = RoomModel()
     public private(set) var participants: Set<ParticipantID> = []
     public private(set) var mediaState: MediaConnectionState = .disconnected
@@ -738,7 +738,7 @@ public final class AppModel {
         Task { await drawPump?.send(clear) }
     }
 
-    /// Apply an inbound `state`-channel payload: a RoomSnapshot (full state, revision-gated) or a
+    /// Apply an inbound `state`-channel payload: a RoomSnapshot (full state, union-merged) or a
     /// ShareEvent (open/close a viewer window promptly).
     private func applyStatePayload(_ data: Data) {
         guard let envelope = try? WireCodec.decode(data), let kind = envelope.kind else {

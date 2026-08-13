@@ -206,7 +206,7 @@ struct SharedWindowTile: View {
                 .onTapGesture { if !isLocal { focusOrReopen() } }
             HStack(spacing: 6) {
                 Circle().fill(model.color(for: ownerID)).frame(width: 8, height: 8)
-                Text(model.shortLabel(for: ownerID))
+                Text(model.displayLabel(for: ownerID))
                     .font(.caption.monospaced())
                 if model.room.pauseState(of: windowID) == .paused {
                     Text("paused").font(.caption2).foregroundStyle(.orange)
