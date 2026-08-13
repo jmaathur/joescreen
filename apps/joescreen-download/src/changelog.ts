@@ -14,6 +14,15 @@ export interface Release {
 // Newest first.
 export const RELEASES: Release[] = [
 	{
+		version: "0.3.2",
+		date: "2026-08-13",
+		tag: "early beta",
+		highlights: [
+			"Shared windows now carry their owner's name — window titles, share tiles, and the Focus menu all say whose window it is",
+			"iOS beta: calls keep running in the background, Picture-in-Picture, and clean call-end handling",
+		],
+	},
+	{
 		version: "0.3.1",
 		date: "2026-08-07",
 		tag: "early beta",

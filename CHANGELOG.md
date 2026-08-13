@@ -7,6 +7,16 @@ The user-facing highlights from each version are also shown in the "What's new" 
 [joescreen.cheffing.dev](https://joescreen.cheffing.dev) — keep that section (in
 `apps/joescreen-download/src/changelog.ts`) in sync with the entries here when you cut a release.
 
+## [0.3.2] — 2026-08-13 · early beta
+
+### Changed
+- Shared windows now carry their owner's name everywhere one appears: window titles, share
+  tiles, and the Focus menu all say whose window it is.
+
+### iOS beta
+- Calls keep running when the app is backgrounded, Picture-in-Picture for shared windows, and
+  call end is handled cleanly (no stuck sessions).
+
 ## [0.3.1] — 2026-08-07 · early beta
 
 ### Fixed
