@@ -32,8 +32,11 @@ actor DrawPump {
     /// Consume inbound draw messages, apply them to the DrawModel via `mutate`, and notify `onChange`.
     /// Our OWN echoes are applied too (idempotent under the authorSeq monotonicity check) so the local
     /// author sees a single source of truth; the sequencer guarantees our ops never regress.
+    /// `onStroke` fires for every applied DrawOp so the receiver can start its ephemeral-ink
+    /// countdown (strokes expire a fixed interval after LOCAL receipt).
     func runInbound(
         mutate: @escaping @MainActor (_ apply: (inout DrawModel) -> Void) -> Void,
+        onStroke: @escaping @MainActor (DrawOp) -> Void,
         onChange: @escaping @MainActor (WindowID) -> Void
     ) async {
         for await data in channel.incoming() {
@@ -41,7 +44,7 @@ actor DrawPump {
             switch kind {
             case .drawOp:
                 guard let op = try? WireCodec.unpack(env, as: DrawOp.self) else { continue }
-                await MainActor.run { mutate { $0.apply(op) }; onChange(op.windowID) }
+                await MainActor.run { mutate { $0.apply(op) }; onStroke(op); onChange(op.windowID) }
             case .drawClear:
                 guard let clear = try? WireCodec.unpack(env, as: DrawClear.self) else { continue }
                 await MainActor.run { mutate { $0.apply(clear) }; onChange(clear.windowID) }

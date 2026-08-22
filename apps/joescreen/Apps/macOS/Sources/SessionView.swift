@@ -4,46 +4,161 @@ import JoeScreenUI
 import JoeScreenLiveKit
 import LiveKit
 
-/// The in-call view: connection banner, roster, share controls. Remote shared windows are rendered
-/// as separate native NSWindows (M4), not inside this view.
+/// The in-call workspace: participants and notes in the collapsible leading sidebar, shared screens
+/// in the center, and face video in the trailing inspector. Remote shared windows are also
+/// rendered as separate native NSWindows (M4).
 struct SessionView: View {
     @Environment(AppModel.self) private var model
+    @State private var isConfirmingLeave = false
+
+    private var inspectorPresentation: Binding<Bool> {
+        Binding(
+            get: { model.inspectorIsPresented },
+            // A system reconciliation hide is intentionally not persisted as user preference.
+            set: { model.handleSystemInspectorPresentationChange($0) })
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ConnectionBanner()
-            // Remote-control status (F4): "X is driving" badge + the R8 secure-input notice.
-            RemoteControlBanner()
-            Divider()
-            // The "see everyone" strip (M10): self tile + one per participant, between the banner
-            // and the roster/shares split. Hidden until there's someone/something to show.
-            ParticipantTileStrip()
-            Divider()
-            HStack(alignment: .top, spacing: 0) {
-                RosterView()
-                    .frame(width: 220)
-                Divider()
-                SharesPane()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if model.showTranscriptPane {
-                    Divider()
-                    TranscriptPane()
-                        .frame(width: 300)
-                }
-            }
-            Divider()
-            // Bottom control bar: mic + camera split-buttons and Leave (CoScreen-style layout).
-            MediaControlBar()
+        // This is deliberately the session root: NavigationSplitView owns the leading navigator and
+        // supplies the standard macOS sidebar toolbar command/keyboard behavior.
+        NavigationSplitView {
+            SessionSidebar()
+        } detail: {
+            SessionDetail()
+        }
+        // Attached to the split view (not the detail content) so the toolbar keeps one full-width
+        // trailing section: an inspector inside the detail column re-splits the toolbar during its
+        // slide-in animation, which briefly overflows the trailing items into a ">>" menu.
+        .inspector(isPresented: inspectorPresentation) {
+            SessionInspector()
+                .inspectorColumnWidth(min: 220, ideal: model.inspectorWidth, max: 380)
         }
         .toolbar {
+            // Navigation placement follows NavigationSplitView's automatic sidebar item on macOS.
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    isConfirmingLeave = true
+                } label: {
+                    Label("Leave Session", systemImage: "rectangle.portrait.and.arrow.right")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .help("Leave the session")
+            }
+
+            ToolbarItemGroup(placement: .principal) {
+                if model.gateMuted {
+                    Label("Microphone yielding", systemImage: "person.2.wave.2.fill")
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(.secondary)
+                        .help("Mic auto-muted: a co-located participant is speaking")
+                }
+
+                if model.isSharingDisplay {
+                    Button {
+                        model.stopDisplayShare()
+                    } label: {
+                        Label("Stop Sharing Display", systemImage: "stop.circle.fill")
+                    }
+                    .help("Stop sharing your screen")
+                }
+            }
+
+            // This action follows the selected sidebar destination: screen destinations can be
+            // shared, while Meeting Notes exposes the transcription + copy-notes controls.
+            ToolbarItemGroup(placement: .secondaryAction) {
+                if model.sidebarSelection == .notes {
+                    Button {
+                        model.copyMeetingNotesToClipboard()
+                    } label: {
+                        Label("Copy Notes", systemImage: "doc.on.doc")
+                    }
+                    .disabled(!model.hasMeetingNotesToCopy)
+                    .help("Copy the meeting notes to the clipboard")
+
+                    Button {
+                        model.toggleTranscription()
+                    } label: {
+                        Label(
+                            model.transcriptionEnabled ? "Stop Transcribing" : "Transcribe",
+                            systemImage: model.transcriptionEnabled
+                                ? "waveform.circle.fill"
+                                : "waveform.circle")
+                    }
+                    .help(model.transcriptionEnabled
+                          ? "Stop transcribing the call"
+                          : "Transcribe the call on this Mac")
+                } else {
+                    // Ephemeral annotation (F9.1): the pencil arms draw mode over the share grid.
+                    // Strokes broadcast to everyone and evaporate 15s after each stroke ends.
+                    Button {
+                        model.toggleDrawMode()
+                    } label: {
+                        Label("Annotate",
+                              systemImage: model.drawState.drawModeEnabled
+                                  ? "pencil.tip.crop.circle.fill"
+                                  : "pencil.tip.crop.circle")
+                            .foregroundStyle(model.drawState.drawModeEnabled
+                                             ? AnyShapeStyle(Color.accentColor)
+                                             : AnyShapeStyle(.primary))
+                    }
+                    .help(model.drawState.drawModeEnabled
+                          ? "Stop annotating shared screens"
+                          : "Draw on shared screens — ink fades after 15 seconds")
+
+                    Button {
+                        model.beginShare()
+                    } label: {
+                        Label("Share", systemImage: "plus.rectangle.on.rectangle")
+                    }
+                    .help("Share a window or your whole screen with the room")
+                }
+            }
+
+            ToolbarItemGroup(placement: .primaryAction) {
+                MicrophoneToolbarMenu()
+                CameraToolbarMenu()
+                ClipboardToolbarToggle()
+
+                Button {
+                    model.setActiveSpeakerPictureInPicturePresented(
+                        !model.isActiveSpeakerPictureInPicturePresented)
+                } label: {
+                    Label(
+                        "Active Speaker Picture in Picture",
+                        systemImage: model.isActiveSpeakerPictureInPicturePresented ? "pip.exit" : "pip.enter")
+                }
+                .help(model.isActiveSpeakerPictureInPicturePresented
+                      ? "Close active-speaker picture in picture"
+                      : "Show active speaker in picture in picture")
+            }
+
+            // Break the Liquid Glass capsule: on macOS 26 adjacent same-placement items merge
+            // into one glass group, so a separate ToolbarItem alone leaves the inspector toggle
+            // fused to the feature buttons. The spacer forces the visual split.
+            if #available(macOS 26.0, *) {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+            }
+
+            // Its own item (not part of the group above) so the inspector toggle renders as a
+            // separate capsule, visually apart from the in-call feature buttons.
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    model.beginShare()
+                    // Inspector owns its platform transition.
+                    model.toggleInspector()
                 } label: {
-                    Label("Share", systemImage: "plus.rectangle.on.rectangle")
+                    Label("Toggle Inspector", systemImage: "sidebar.trailing")
                 }
-                .help("Share a window or your whole screen with the room")
+                .help(model.inspectorIsPresented ? "Hide participant faces" : "Show participant faces")
             }
+        }
+        .alert("Leave this session?", isPresented: $isConfirmingLeave) {
+            Button("Cancel", role: .cancel) {}
+            Button("Leave", role: .destructive) {
+                model.leave()
+            }
+        } message: {
+            Text("Your microphone, camera, and active screen shares will be disconnected.")
         }
         // Admission refusal (M11): a visible alert when a share won't fit the uplink / encode budget.
         .alert("Can't share", isPresented: Binding(
@@ -65,6 +180,50 @@ struct SessionView: View {
             }
         }
     }
+}
+
+/// The selected navigator destination projected into the center column. Status/control chrome uses
+/// safe-area insets so it does not participate in navigation or scroll content.
+private struct SessionDetail: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Group {
+            switch model.sidebarSelection {
+            case .screenShares:
+                SharesPane()
+            case .notes:
+                TranscriptPane()
+            case .participant(let participantID):
+                SharesPane(ownerFilter: participantID)
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            RemoteControlBanner()
+        }
+    }
+}
+
+/// Native trailing utility inspector dedicated to participant faces.
+private struct SessionInspector: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ParticipantFaceColumn(selectedParticipantID: model.selectedParticipantID)
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(key: InspectorWidthPreferenceKey.self, value: geometry.size.width)
+                }
+            }
+            .onPreferenceChange(InspectorWidthPreferenceKey.self) {
+                model.recordInspectorWidth(Double($0))
+            }
+    }
+}
+
+private struct InspectorWidthPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 /// The remote-control status banner (F4): "X is driving" while a peer controls one of your windows,
@@ -131,34 +290,44 @@ struct ConnectionBanner: View {
 /// the mirrored RoomModel and opens/moves the corresponding native windows.
 struct SharesPane: View {
     @Environment(AppModel.self) private var model
+    var ownerFilter: ParticipantID?
+
+    init(ownerFilter: ParticipantID? = nil) {
+        self.ownerFilter = ownerFilter
+    }
 
     var body: some View {
-        let shared = model.sharedWindowsSorted
-        // The self camera preview now lives in the participant strip (M10), so the shares pane is
-        // purely about shared windows: empty-state when there are none.
-        if shared.isEmpty {
-            VStack(spacing: 10) {
-                Image(systemName: "rectangle.dashed")
-                    .font(.system(size: 32))
-                    .foregroundStyle(.tertiary)
-                Text("No windows shared yet")
-                    .foregroundStyle(.secondary)
-                Text("Click Share Window to share one of yours,\nor wait for someone else to share.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 12)], spacing: 12) {
-                    ForEach(shared, id: \.window) { entry in
-                        SharedWindowTile(windowID: entry.window, ownerID: entry.owner)
-                    }
+        let shared = model.sharedWindowsSorted.filter { ownerFilter == nil || $0.owner == ownerFilter }
+        VStack(spacing: 0) {
+            // Camera previews live in the face inspector, so the center remains dedicated to the
+            // room's shared screens.
+            if shared.isEmpty {
+                ContentUnavailableView {
+                    Label(emptyTitle, systemImage: "rectangle.dashed")
+                } description: {
+                    Text(emptyMessage)
                 }
-                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+                        ForEach(shared, id: \.window) { entry in
+                            SharedWindowTile(windowID: entry.window, ownerID: entry.owner)
+                        }
+                    }
+                    .padding(12)
+                }
             }
         }
+    }
+
+    private var emptyTitle: String {
+        ownerFilter == nil ? "No screens shared yet" : "No shares from this participant"
+    }
+
+    private var emptyMessage: String {
+        if ownerFilter != nil { return "Choose Screen Shares to see everything in the room." }
+        return "Click Share to share a window or screen,\nor wait for someone else to share."
     }
 }
 
@@ -203,6 +372,19 @@ struct SharedWindowTile: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(model.color(for: ownerID), lineWidth: 3))
+                // Ephemeral annotation ink (F9.1): every tile RENDERS everyone's strokes (the
+                // sharer sees ink land on their own preview), but drawing is captured only over
+                // OTHER participants' shares. The replicated ShareInfo aspect keeps normalized
+                // stroke coordinates on the same pixel feature at every peer.
+                .overlay {
+                    GeometryReader { geo in
+                        DrawOverlay(windowID: windowID, size: geo.size,
+                                    videoAspect: model.room.shareInfo[windowID]?.sourceAspectRatio
+                                        ?? model.remoteWindowAspect(windowID))
+                            .allowsHitTesting(!isLocal)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
                 .onTapGesture { if !isLocal { focusOrReopen() } }
             HStack(spacing: 6) {
                 Circle().fill(model.color(for: ownerID)).frame(width: 8, height: 8)
