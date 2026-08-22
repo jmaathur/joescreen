@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import JoeScreenKit
 
 /// The root content view. Shows the join sheet when idle, the in-call session view otherwise.
@@ -68,6 +69,78 @@ struct ConnectingView: View {
                 .controlSize(.regular)
         }
         .padding(40)
+        // The session toolbar is useful once the call exists, but an empty title/toolbar strip makes
+        // this transient state look like an unfinished window. Extend the loading surface behind the
+        // traffic lights and restore the normal window chrome as soon as this view disappears.
+        .background(CleanLoadingWindowChrome())
+    }
+}
+
+/// Temporarily removes the empty macOS title/toolbar strip without changing the in-call window.
+/// The traffic-light controls remain available over the full-size loading surface.
+private struct CleanLoadingWindowChrome: NSViewRepresentable {
+    func makeNSView(context: Context) -> CleanLoadingWindowChromeView {
+        CleanLoadingWindowChromeView()
+    }
+
+    func updateNSView(_ nsView: CleanLoadingWindowChromeView, context: Context) {
+        nsView.applyIfPossible()
+    }
+
+    static func dismantleNSView(_ nsView: CleanLoadingWindowChromeView, coordinator: ()) {
+        nsView.restore()
+    }
+}
+
+@MainActor
+private final class CleanLoadingWindowChromeView: NSView {
+    private struct PreviousChrome {
+        let titleVisibility: NSWindow.TitleVisibility
+        let titlebarAppearsTransparent: Bool
+        let usedFullSizeContentView: Bool
+        let toolbarWasVisible: Bool?
+    }
+
+    private weak var configuredWindow: NSWindow?
+    private var previousChrome: PreviousChrome?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyIfPossible()
+    }
+
+    func applyIfPossible() {
+        guard let window else { return }
+        if configuredWindow !== window {
+            restore()
+            configuredWindow = window
+            previousChrome = PreviousChrome(
+                titleVisibility: window.titleVisibility,
+                titlebarAppearsTransparent: window.titlebarAppearsTransparent,
+                usedFullSizeContentView: window.styleMask.contains(.fullSizeContentView),
+                toolbarWasVisible: window.toolbar?.isVisible)
+        }
+
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.styleMask.insert(.fullSizeContentView)
+        window.toolbar?.isVisible = false
+    }
+
+    func restore() {
+        guard let configuredWindow, let previousChrome else { return }
+        configuredWindow.titleVisibility = previousChrome.titleVisibility
+        configuredWindow.titlebarAppearsTransparent = previousChrome.titlebarAppearsTransparent
+        if previousChrome.usedFullSizeContentView {
+            configuredWindow.styleMask.insert(.fullSizeContentView)
+        } else {
+            configuredWindow.styleMask.remove(.fullSizeContentView)
+        }
+        if let toolbarWasVisible = previousChrome.toolbarWasVisible {
+            configuredWindow.toolbar?.isVisible = toolbarWasVisible
+        }
+        self.configuredWindow = nil
+        self.previousChrome = nil
     }
 }
 

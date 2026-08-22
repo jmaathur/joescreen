@@ -460,16 +460,23 @@ public actor LiveKitTransport: MediaTransport {
     /// mic device and needs `NSMicrophoneUsageDescription` + mic TCC.
     public func setMicrophone(enabled: Bool) async throws {
         #if os(macOS)
-        if enabled {
-            if Self.voiceProcessingDisabledForTesting {
-                let audio = AudioManager.shared
-                if audio.isVoiceProcessingEnabled { try? audio.setVoiceProcessingEnabled(false) }
-            } else {
-                Self.ensureVoiceProcessing()
-            }
-        }
+        if enabled { applyVoiceProcessingPreference() }
         #endif
         _ = try await room.localParticipant.setMicrophone(enabled: enabled)
+    }
+
+    /// User preference for Apple voice processing (VPIO: echo cancellation, noise suppression,
+    /// AGC — and the gateway to the system Voice Isolation mic mode). Defaults ON. The app layer
+    /// persists it and re-applies it per session; disabling gives peers the raw, unprocessed mic.
+    public private(set) var voiceIsolationEnabled = true
+
+    /// Record the voice-isolation preference and apply it immediately (macOS; on iOS the mic
+    /// mute-mode configuration in `connect` owns AudioManager, so only the preference is stored).
+    public func setVoiceIsolation(enabled: Bool) {
+        voiceIsolationEnabled = enabled
+        #if os(macOS)
+        applyVoiceProcessingPreference()
+        #endif
     }
 
     /// TEST-ONLY escape hatch (`JOESCREEN_DISABLE_AEC=1`): turn off VoiceProcessingIO + APM so
@@ -480,16 +487,17 @@ public actor LiveKitTransport: MediaTransport {
         ProcessInfo.processInfo.environment["JOESCREEN_DISABLE_AEC"] == "1"
 
     #if os(macOS)
-    /// Ensure Apple's VoiceProcessingIO (VPIO) is active before capture starts. On macOS, VPIO —
-    /// not WebRTC's software APM — performs the real acoustic echo cancellation, AGC, and noise
+    /// Reconcile Apple's VoiceProcessingIO (VPIO) with the user preference. On macOS, VPIO — not
+    /// WebRTC's software APM — performs the real acoustic echo cancellation, AGC, and noise
     /// suppression (the echo canceller that keeps remote loudspeaker output out of the local mic).
-    /// It defaults to enabled; toggling it restarts the audio engine, so only flip it when it's
-    /// actually off (idempotent). Best-effort: capture still works without it, just without AEC.
-    /// macOS-only — on iOS the mic mute-mode fix in `connect` owns the AudioManager configuration.
-    private static func ensureVoiceProcessing() {
+    /// Toggling it restarts the audio engine, so only flip it when the state actually differs
+    /// (idempotent). Best-effort: capture still works without it, just without AEC. The test
+    /// escape hatch (`JOESCREEN_DISABLE_AEC=1`) always wins and keeps processing off.
+    private func applyVoiceProcessingPreference() {
         let audio = AudioManager.shared
-        guard !audio.isVoiceProcessingEnabled else { return }
-        try? audio.setVoiceProcessingEnabled(true)
+        let desired = voiceIsolationEnabled && !Self.voiceProcessingDisabledForTesting
+        guard audio.isVoiceProcessingEnabled != desired else { return }
+        try? audio.setVoiceProcessingEnabled(desired)
     }
     #endif
 
@@ -588,10 +596,53 @@ public actor LiveKitTransport: MediaTransport {
                 MediaInputDevice(id: $0.uniqueID, name: $0.localizedName, isDefault: $0.uniqueID == defaultID)
             }
         case .audioInput:
-            return AudioManager.shared.inputDevices.map {
+            let audioManager = AudioManager.shared
+            let inputs = audioManager.inputDevices.map {
                 MediaInputDevice(id: $0.deviceId, name: $0.name, isDefault: $0.isDefault)
             }
+            // WebRTC can expose the system-default, communications-default, and physical endpoint
+            // as distinct IDs with the same localized name. They are one selectable microphone to
+            // a person, so keep one row and prefer the endpoint currently in use.
+            return Self.deduplicatedAudioInputs(inputs, preferredID: audioManager.inputDevice.deviceId)
         }
+    }
+
+    /// Collapse WebRTC aliases that represent the same human-visible microphone. The preferred
+    /// endpoint wins so selecting the surviving row continues to round-trip through AudioManager.
+    nonisolated static func deduplicatedAudioInputs(
+        _ inputs: [MediaInputDevice],
+        preferredID: String?
+    ) -> [MediaInputDevice] {
+        var result: [MediaInputDevice] = []
+        var indexByName: [String: Int] = [:]
+
+        for input in inputs {
+            let foldedName = input.name
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+                .split(whereSeparator: { $0.isWhitespace })
+                .joined(separator: " ")
+            let key = foldedName.isEmpty ? "id:\(input.id)" : foldedName
+
+            guard let index = indexByName[key] else {
+                indexByName[key] = result.count
+                result.append(input)
+                continue
+            }
+
+            let existing = result[index]
+            let existingIsPreferred = existing.id == preferredID
+            let inputIsPreferred = input.id == preferredID
+            let shouldReplace = inputIsPreferred
+                || (!existingIsPreferred && input.isDefault && !existing.isDefault)
+            let representative = shouldReplace ? input : existing
+            result[index] = MediaInputDevice(
+                id: representative.id,
+                name: representative.name,
+                isDefault: existing.isDefault || input.isDefault)
+        }
+
+        return result
     }
 
     /// The uniqueID of the camera the live capturer is actually using, or nil while the camera is
@@ -645,7 +696,12 @@ public actor LiveKitTransport: MediaTransport {
     /// Nil when the camera is off. LiveKit-typed on purpose — this is an app-layer rendering
     /// convenience on the concrete adapter, NOT part of the framework-free `MediaTransport` seam.
     public func localCameraVideoTrack() -> VideoTrack? {
-        room.localParticipant.firstCameraVideoTrack
+        // Prefer the exact publication returned by `setCamera`. Asking the participant to find its
+        // "first" camera track can briefly return nil while LiveKit is reconciling publications,
+        // even though capture and upload have already started. That race leaves AppModel with a nil
+        // self-preview until the next camera toggle.
+        (cameraPublication?.track as? LocalVideoTrack)
+            ?? room.localParticipant.firstCameraVideoTrack
     }
 
     /// The LOCAL published screen-share track for `windowID`, for the sharer's OWN thumbnail preview.

@@ -9,6 +9,7 @@ or a running SFU). Each maps to a row in `TESTING.md`.
 | `EncodeLoopbackSpike/` | `SCStream` → VT low-latency H.264 encode → decode → `AVSampleBufferDisplayLayer` render on ONE Mac. | machine-gateable (single device) — TESTING.md Tier-1 spikes |
 | `InjectionSpike/` | `CGEvent` injection into a target window on a Dev-ID non-sandboxed build with the `kTCCServicePostEvent` grant, incl. tagged-event local-override. | machine-gateable (single device, requires the grant) |
 | `SFULoadSpike/` | `livekit-server --dev` bring-up, 2-window publish at 3–5 Mbps, 9-subscriber load, uplink/encode/glass-to-glass measurement → feeds `AdmissionController` thresholds. | hardware (TESTING.md H2/H3) |
+| `UltrasonicPairingSpike/` | 18–20 kHz FSK chirp: MacBook speaker → air → mic decode of a 32-bit participant code for Room Mode co-location pairing. Ran 2026-08-21: VIABLE (11/11 symbols @ 106 dB near-field worst case; beacons must repeat; codes need CRC/ECC). See file header for the mic-array/AGC/routing pitfalls. | hardware (single Mac, mic grant) |
 | `LegibilityCorpus/` | Codec A/B: fixed screen-text corpus, fixed-QP ladder encode, OCR character-error-rate scorer → the D5 VP9-vs-H.264 decision gate. | hardware (TESTING.md H4) |
 
 **Why they aren't fleshed out yet:** they exercise exactly the APIs the build spec forbids
