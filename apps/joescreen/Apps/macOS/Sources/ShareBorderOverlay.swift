@@ -31,7 +31,8 @@ final class ShareBorderOverlay {
         window = nil
     }
 
-    /// The AppKit (bottom-left origin) frame for a display, so the border window exactly covers it.
+    /// The AppKit (bottom-left origin) frame for a display, so an overlay window exactly covers it.
+    /// Shared with RemoteInkOverlayManager (ink over a display share).
     ///
     /// Multi-display fix: prefer the matching `NSScreen`'s `.frame` — those are ALREADY in AppKit
     /// global coordinates, so no manual flip (and its multi-monitor pitfalls) is needed. This is what
@@ -42,7 +43,7 @@ final class ShareBorderOverlay {
     /// Fallback (no matching NSScreen — shouldn't happen for a shareable display): flip `CGDisplayBounds`
     /// against the PRIMARY display's height, since AppKit's global origin is the primary display's
     /// bottom-left — NOT against the union of all screens (the old bug).
-    private static func appKitFrame(for displayID: CGDirectDisplayID) -> NSRect {
+    static func appKitFrame(for displayID: CGDirectDisplayID) -> NSRect {
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         if let screen = NSScreen.screens.first(where: {
             // The value is an NSNumber wrapping the CGDirectDisplayID.

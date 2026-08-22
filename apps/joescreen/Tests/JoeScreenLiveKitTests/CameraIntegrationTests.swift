@@ -43,6 +43,21 @@ final class CameraIntegrationTests: XCTestCase {
         _ = await transport.availableInputDevices(.videoInput)
     }
 
+    func testAudioEnumerationCollapsesSameNamedWebRTCAliases() {
+        let inputs = [
+            MediaInputDevice(id: "default", name: "🎧 MAX", isDefault: true),
+            MediaInputDevice(id: "communications", name: "🎧 MAX", isDefault: false),
+            MediaInputDevice(id: "physical", name: "🎧 MAX", isDefault: false),
+            MediaInputDevice(id: "builtin", name: "MacBook Pro Microphone", isDefault: false),
+        ]
+
+        let result = LiveKitTransport.deduplicatedAudioInputs(inputs, preferredID: "physical")
+
+        XCTAssertEqual(result.map(\.id), ["physical", "builtin"])
+        XCTAssertEqual(result.map(\.name), ["🎧 MAX", "MacBook Pro Microphone"])
+        XCTAssertTrue(result[0].isDefault, "the surviving alias should retain the group's default status")
+    }
+
     func testCameraMetadataSurfaceIsWiredCrossRoom() async throws {
         let url = try serverURL()
         let room = "itest-camera-\(UUID().uuidString.prefix(8))"

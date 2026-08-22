@@ -10,6 +10,10 @@ cd "$(dirname "$0")/../apps/joescreen"
 
 ROOM="${1:-demo}"
 JOIN_URL="${JOIN_URL:-ws://localhost:7880}"
+# Second instance on the same Mac? JOIN_MUTED=1 keeps its mic off — two live instances on one
+# speaker/mic pair feedback-loop (each process's AEC only knows its own render stream).
+MUTED_ARGS=()
+if [ "${JOIN_MUTED:-0}" = "1" ]; then MUTED_ARGS=(--join-muted); fi
 
 # project.yml references ${SHIP_IOS_ENTITLEMENTS} / ${SHIP_MAC_ENTITLEMENTS}; default both so xcodegen
 # doesn't emit an empty path. Dev uses the empty macOS entitlements (ad-hoc, no AMFI Killed-9).
@@ -32,6 +36,6 @@ if [ ! -d "$APP" ]; then
 	exit 1
 fi
 
-echo "▶ launching JoeScreen → room=$ROOM url=$JOIN_URL"
-open -n "$APP" --args --join-url "$JOIN_URL" --room "$ROOM" --identity "$(uuidgen)"
-echo "✓ JoeScreen launched. Re-run 'bun run app' to open another instance (they'll share the room)."
+echo "▶ launching JoeScreen → room=$ROOM url=$JOIN_URL${JOIN_MUTED:+ (join-muted)}"
+open -n "$APP" --args --join-url "$JOIN_URL" --room "$ROOM" --identity "$(uuidgen)" ${MUTED_ARGS[@]+"${MUTED_ARGS[@]}"}
+echo "✓ JoeScreen launched. Re-run 'bun run app' to open another instance (they'll share the room); JOIN_MUTED=1 for a silent second instance."

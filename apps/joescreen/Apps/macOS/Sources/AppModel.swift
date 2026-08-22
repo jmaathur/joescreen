@@ -236,6 +236,11 @@ public final class AppModel {
         get { UserDefaults.standard.bool(forKey: "JoeScreen.joinMuted") }
         set { UserDefaults.standard.set(newValue, forKey: "JoeScreen.joinMuted") }
     }
+    /// Session-scoped `--join-muted` launch flag (the two-instance-one-Mac dev loop: a second
+    /// instance with a live mic turns the shared speaker/mic pair into a feedback loop, because
+    /// each process's AEC only knows its OWN render stream). NOT persisted — UserDefaults are
+    /// shared by bundle id, so persisting would mute both instances.
+    public var launchMutedJoin = false
 
     /// The live connected-participant set as reported by the transport (local + all remotes). The
     /// authoritative membership source; the displayed `participants` roster is recomputed from this
@@ -247,6 +252,8 @@ public final class AppModel {
     private var localCaptures: [WindowID: any ShareCaptureService] = [:]
     /// The kind (window/display) of each local share, so unshare updates the context correctly.
     private var localShareKinds: [WindowID: ShareKind] = [:]
+    /// Where each local share lives on screen (F9 sharer-side ink overlay targets).
+    private var localShareScreenTargets: [WindowID: InkTarget] = [:]
     /// The structural share context this host publishes (D5). Updated to include a PENDING share
     /// BEFORE publishing it, so the new track gets the right codec (the ordering fix, latent #3).
     private var shareContext = ShareContext()
@@ -296,6 +303,7 @@ public final class AppModel {
     private let windowManager = RemoteWindowManager()
     private let pictureInPictureManager = ActiveSpeakerPictureInPictureManager()
     private let borderOverlay = ShareBorderOverlay()
+    private let inkOverlay = RemoteInkOverlayManager()
     private var stateChannel: (any WireDataChannel)?
     private var cursorPump: CursorPump?
     private var clipboardPump: ClipboardPump?
@@ -322,6 +330,10 @@ public final class AppModel {
         if launchJoin != nil { self.showJoinSheet = false }
         windowManager.model = self
         pictureInPictureManager.model = self
+        inkOverlay.providers = { [weak self] in
+            guard let self else { return (DrawModel(), [:]) }
+            return (self.drawState.model, self.localShareScreenTargets)
+        }
         hoverShare = HoverShareController(model: self)
         installGlobalMicHotkey()
         coLocatedParticipants = Set(
@@ -357,9 +369,9 @@ public final class AppModel {
         isActiveSpeakerPictureInPicturePresented = false
     }
 
-    /// Persist a user-resized inspector width after its geometry settles. In particular, never feed
-    /// the inspector's animated intermediate widths straight back into `inspectorColumnWidth`:
-    /// doing so changes the transition's layout target while the native transition is in flight.
+    /// Persist a user-resized inspector width without feeding it back into the live column. The
+    /// fixed `inspectorWidth` remains the animation target until the next presentation, so geometry
+    /// observation cannot move the target while AppKit's native transition is in flight.
     public func recordInspectorWidth(_ width: Double) {
         inspectorWidthPersistenceTask?.cancel()
         inspectorWidthPersistenceTask = nil
@@ -379,8 +391,6 @@ public final class AppModel {
             defer { self.inspectorWidthPersistenceTask = nil }
             guard self.inspectorIsPresented else { return }
             guard abs(clamped - self.persistedInspectorWidth) >= 1 else { return }
-            // Save the settled width without mutating the `ideal` supplied to the inspector that
-            // is currently on screen. The saved value is applied the next time it is presented.
             self.persistedInspectorWidth = clamped
         }
     }
@@ -445,6 +455,8 @@ public final class AppModel {
     /// prior session's orphans) and teardown. Does NOT touch the transport/room — callers own that.
     private func resetLocalShareState() {
         borderOverlay.hide()
+        inkOverlay.hideAll()
+        localShareScreenTargets.removeAll()
         isSharingDisplay = false
         for (_, capture) in localCaptures { Task { await capture.stop() } }
         localCaptures.removeAll()
@@ -479,6 +491,12 @@ public final class AppModel {
     public func joinRecent(_ entry: RecentsStore.Entry) {
         guard let url = URL(string: entry.serverURL) else { return }
         requestJoin(DirectJoinParameters(serverURL: url, room: entry.room, displayName: entry.displayName))
+    }
+
+    /// Remove every recent room from memory and persisted defaults.
+    public func clearRecentRooms() {
+        recents.clear()
+        UserDefaults.standard.removeObject(forKey: Self.recentsKey)
     }
 
     /// A shareable `joescreen://` invite link for the current (or a given) session, for the menu-bar
@@ -580,10 +598,14 @@ public final class AppModel {
             let transcriptCh = try await transport.openDataChannel(.transcript)
             self.transcriptChannel = transcriptCh
             startTranscriptPump(transcriptCh)
-            // Enable the mic on join (M5) UNLESS the user opted to join muted (backlog #2). Joining
-            // muted still publishes the track (LiveKit mutes rather than unpublishes), so unmuting
-            // later is instant and peers see the correct mic-off badge meanwhile.
-            try? await transport.setMicrophone(enabled: !joinMuted)
+            // Voice isolation (VPIO) preference: applied BEFORE the mic first enables so the
+            // capture engine starts in the persisted state instead of restarting after.
+            await transport.setVoiceIsolation(enabled: voiceIsolationEnabled)
+            // Enable the mic on join (M5) UNLESS the user opted to join muted (backlog #2) or the
+            // session launched with --join-muted (dev loop). Joining muted still publishes the
+            // track (LiveKit mutes rather than unpublishes), so unmuting later is instant and
+            // peers see the correct mic-off badge meanwhile.
+            try? await transport.setMicrophone(enabled: !(joinMuted || launchMutedJoin))
             micEnabled = await transport.isMicrophoneEnabled()
             startAudioGatePump()
             // Start the cursor pump (M6).
@@ -880,7 +902,10 @@ public final class AppModel {
             await pump.runInbound(
                 mutate: { apply in self?.drawState.apply(apply) },
                 onStroke: { op in self?.drawState.scheduleExpiry(for: op) },
-                onChange: { _ in /* DrawState.rev already bumps the Canvas */ })
+                onChange: { _ in
+                    // Sharer-side ink overlay (F9): repaint the real windows peers are drawing on.
+                    self?.inkOverlay.sync()
+                })
         })
     }
 
@@ -904,6 +929,7 @@ public final class AppModel {
                         points: points, color: color, width: 3)
         drawState.apply { $0.apply(op) }
         drawState.scheduleExpiry(for: op)
+        inkOverlay.sync() // sharer drawing on their own tile: ink the real window immediately
         Task { await drawPump?.send(op) }
     }
 
@@ -912,6 +938,7 @@ public final class AppModel {
         guard let me = localParticipantID else { return }
         let undo = DrawUndo(authorID: me, windowID: windowID)
         drawState.apply { $0.apply(undo) }
+        inkOverlay.sync()
         Task { await drawPump?.send(undo) }
     }
 
@@ -920,6 +947,7 @@ public final class AppModel {
         guard let me = localParticipantID else { return }
         let clear = DrawClear(authorID: me, windowID: windowID)
         drawState.apply { $0.apply(clear) }
+        inkOverlay.sync()
         Task { await drawPump?.send(clear) }
     }
 
@@ -1132,7 +1160,12 @@ public final class AppModel {
     /// share tile has no *remote* track (you don't subscribe to your own publications), so it self-
     /// previews the LOCAL published track instead — see `localWindowTrack`.
     public func isLocallyOwnedShare(_ windowID: WindowID) -> Bool {
-        localParticipantID != nil && room.owner(of: windowID) == localParticipantID
+        // Local capture bookkeeping is authoritative on the sharer. The replicated RoomModel can
+        // momentarily lag a just-started share (or be repaired by a foreign snapshot), but that must
+        // never make our tile take the remote-rendering path and lose its self-preview.
+        localShareKinds[windowID] != nil
+            || localWindowTracks[windowID] != nil
+            || (localParticipantID != nil && room.owner(of: windowID) == localParticipantID)
     }
 
     /// The LOCAL published track for a window WE share, for the sharer's own live thumbnail preview.
@@ -1291,7 +1324,13 @@ public final class AppModel {
     /// Re-fetch the AUDIO input list. Safe to call anytime — audio-device enumeration needs no TCC
     /// and doesn't touch the camera. Used to pre-fill the mic picker on join and when it opens.
     public func refreshAudioInputs() async {
-        audioInputs = await transport.availableInputDevices(.audioInput)
+        let inputs = await transport.availableInputDevices(.audioInput)
+        audioInputs = inputs
+        if let selectedAudioInputID,
+           inputs.contains(where: { $0.id == selectedAudioInputID }) {
+            return
+        }
+        selectedAudioInputID = inputs.first(where: \.isDefault)?.id ?? inputs.first?.id
     }
 
     /// Re-fetch the VIDEO (camera) input list. Kept OFF the join path and only called when the camera
@@ -1300,7 +1339,17 @@ public final class AppModel {
     /// the whole session (incl. remote-track rendering). Enumeration itself doesn't prompt for TCC,
     /// but returns a limited/empty list until access is granted (toggleCamera preflights the grant).
     public func refreshVideoInputs() async {
-        videoInputs = await transport.availableInputDevices(.videoInput)
+        let inputs = await transport.availableInputDevices(.videoInput)
+        videoInputs = inputs
+
+        // Keep the picker selection valid as cameras arrive/disappear. Before the user chooses one,
+        // record AVFoundation's default (or the first enumerated camera) so the menu can render a
+        // real checkmark and enabling video captures from the camera the UI claims is selected.
+        if let selectedVideoInputID,
+           inputs.contains(where: { $0.id == selectedVideoInputID }) {
+            return
+        }
+        selectedVideoInputID = inputs.first(where: \.isDefault)?.id ?? inputs.first?.id
     }
 
     /// Pre-fill both pickers. Audio is fetched inline; video is fetched in a detached task so a slow
@@ -1338,6 +1387,20 @@ public final class AppModel {
             }
             micEnabled = await transport.isMicrophoneEnabled()
         }
+    }
+
+    // MARK: - Voice isolation (Apple voice processing)
+
+    /// Whether Apple voice processing (echo cancellation, noise suppression, AGC — and the gateway
+    /// to the system Voice Isolation mic mode) is on for the local mic. Defaults ON; persisted.
+    public private(set) var voiceIsolationEnabled =
+        UserDefaults.standard.object(forKey: AppModel.voiceIsolationDefaultsKey) as? Bool ?? true
+    private static let voiceIsolationDefaultsKey = "JoeScreen.voiceIsolation"
+
+    public func setVoiceIsolation(enabled: Bool) {
+        voiceIsolationEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: Self.voiceIsolationDefaultsKey)
+        Task { await transport.setVoiceIsolation(enabled: enabled) }
     }
 
     // MARK: - Co-located audio gate (D21 — echo/crosstalk mitigation for same-room participants)
@@ -1457,6 +1520,12 @@ public final class AppModel {
             }
             cameraEnabled = await transport.isCameraPublished()
             localCameraTrack = cameraEnabled ? await transport.localCameraVideoTrack() : nil
+            if cameraEnabled, localCameraTrack != nil {
+                // Participant video lives in the inspector. If SwiftUI hid it while reconciling a
+                // narrow window, reveal it when the user explicitly turns their camera on so the
+                // successful capture never looks broken. Preserve an explicit saved preference.
+                setInspectorPresented(true, persistPreference: false)
+            }
             // An implicit (default-device) enable never set selectedVideoInputID — read the device
             // the capturer actually opened so the picker's checkmark reflects reality.
             if cameraEnabled, selectedVideoInputID == nil {
@@ -1546,6 +1615,7 @@ public final class AppModel {
         let capture = WindowCaptureService(windowID: windowID)
         localCaptures[windowID] = capture
         localShareKinds[windowID] = .window
+        localShareScreenTargets[windowID] = .window(cgWindowID)
 
         // Codec-ordering fix (latent #3): update the share context to INCLUDE this pending window
         // BEFORE publishing, so the transport (which now builds publish options at completePublish,
@@ -1588,6 +1658,9 @@ public final class AppModel {
             localWindowTracks[windowID] = await transport.localScreenShareTrack(for: windowID)
             // Update authoritative room + broadcast.
             room.addShare(windowID, owner: me)
+            // The navigator may currently filter the center to another participant. A successful
+            // local share should always reveal itself instead of remaining live-but-invisible.
+            sidebarSelection = .screenShares
             // Populate the advisory ShareInfo (title/app/source pixels) captured at start so receivers
             // can title + aspect-size their viewer window before the first frame (M9).
             if let info { room.setShareInfo(info, window: windowID) }
@@ -1702,6 +1775,7 @@ public final class AppModel {
         localCaptures[windowID] = nil
         localWindowTracks[windowID] = nil
         localShareKinds[windowID] = nil
+        localShareScreenTargets[windowID] = nil
         localShareBitrates[windowID] = nil
         await transport.unpublishVideoTrack(for: windowID)
         await pushShareContext(shareContext) // exclude the failed share
@@ -1736,6 +1810,7 @@ public final class AppModel {
         let capture = DisplayCaptureService(windowID: windowID, displayID: displayID)
         localCaptures[windowID] = capture
         localShareKinds[windowID] = .display
+        localShareScreenTargets[windowID] = .display(displayID)
 
         // Codec-ordering fix + structural D5: a display share forces H.264 for ALL share tracks.
         // Update the context to INCLUDE the pending display BEFORE publish; the transport
@@ -1769,6 +1844,7 @@ public final class AppModel {
             shareContext = pending
             localWindowTracks[windowID] = await transport.localScreenShareTrack(for: windowID)
             room.addShare(windowID, owner: me)
+            sidebarSelection = .screenShares
             if let info { room.setShareInfo(info, window: windowID) }
             // Show the sharer's screen-border affordance.
             borderOverlay.show(displayID: displayID)
@@ -1819,6 +1895,7 @@ public final class AppModel {
         localWindowTracks[windowID] = nil
         let kind = localShareKinds[windowID] ?? .window
         localShareKinds[windowID] = nil
+        localShareScreenTargets[windowID] = nil
         localShareBitrates[windowID] = nil
         await transport.unpublishVideoTrack(for: windowID)
         // Update the structural context (removing this share) so any remaining tracks reflect it (a
