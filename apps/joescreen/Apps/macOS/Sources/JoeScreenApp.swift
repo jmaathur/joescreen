@@ -27,6 +27,8 @@ struct JoeScreenApp: App {
         let shareDisplayID = JoeScreenApp.parseShareDisplayID(args)
         _model = State(initialValue: AppModel(
             launchJoin: launchJoin, autoShareWindowID: shareWindowID, autoShareDisplayID: shareDisplayID))
+        // Optional --join-muted (dev loop: run a second instance on the same Mac without feedback).
+        if args.contains("--join-muted") { _model.wrappedValue.launchMutedJoin = true }
     }
 
     /// Parse `--share-window-id <n>` (or `--share-window-id=<n>`) from the launch args.

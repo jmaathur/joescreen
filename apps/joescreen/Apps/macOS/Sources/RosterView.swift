@@ -5,6 +5,7 @@ import JoeScreenKit
 /// per-row selection booleans. The List keeps its system sidebar material and keyboard behavior.
 struct SessionSidebar: View {
     @Environment(AppModel.self) private var model
+    let onLeave: () -> Void
 
     private var sortedParticipants: [ParticipantID] {
         model.participants.sorted {
@@ -60,10 +61,16 @@ struct SessionSidebar: View {
         }
         .listStyle(.sidebar)
         .navigationSplitViewColumnWidth(min: 190, ideal: 230, max: 300)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                Divider()
-                ConnectionBanner()
+        // Keep the leading navigation item owned by the sidebar column. This lets AppKit animate
+        // the sidebar and its toolbar region as one native split-view transaction.
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button(action: onLeave) {
+                    Label("Leave Session", systemImage: "rectangle.portrait.and.arrow.right")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .help("Leave the session")
             }
         }
     }

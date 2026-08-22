@@ -72,12 +72,53 @@ struct JoinSheet: View {
                     }
 
                     formFieldRow("Room", systemImage: "person.3") {
-                        TextField("", text: $room, prompt: Text("demo"))
-                            .textFieldStyle(.plain)
-                            .multilineTextAlignment(.trailing)
-                            .lineLimit(1)
-                            .frame(height: 20)
-                            .accessibilityLabel("Room")
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            TextField("", text: $room, prompt: Text("demo"))
+                                .textFieldStyle(.plain)
+                                .multilineTextAlignment(.trailing)
+                                .lineLimit(1)
+                                .frame(height: 20)
+                                .accessibilityLabel("Room")
+
+                            Menu {
+                                if model.recents.entries.isEmpty {
+                                    Text("No recent rooms")
+                                } else {
+                                    Section("Recent Rooms") {
+                                        ForEach(model.recents.entries, id: \.key) { entry in
+                                            Button {
+                                                selectRecentRoom(entry)
+                                            } label: {
+                                                if isSelectedRecentRoom(entry) {
+                                                    Label(recentRoomLabel(entry), systemImage: "checkmark")
+                                                } else {
+                                                    Text(recentRoomLabel(entry))
+                                                }
+                                            }
+                                        }
+
+                                        Divider()
+
+                                        Button(role: .destructive) {
+                                            model.clearRecentRooms()
+                                        } label: {
+                                            Label("Clear Recent Rooms", systemImage: "trash")
+                                        }
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "chevron.down")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 18, height: 20)
+                                    .contentShape(Rectangle())
+                            }
+                            .menuStyle(.borderlessButton)
+                            .menuIndicator(.hidden)
+                            .fixedSize()
+                            .help("Choose a recently joined room")
+                            .accessibilityLabel("Recent rooms")
+                        }
                     }
                 }
 
@@ -175,6 +216,20 @@ struct JoinSheet: View {
             .symbolRenderingMode(.hierarchical)
             .foregroundStyle(tint)
             .frame(width: 18, alignment: .center)
+    }
+
+    private func selectRecentRoom(_ entry: RecentsStore.Entry) {
+        room = entry.room
+        serverURL = entry.serverURL
+    }
+
+    private func isSelectedRecentRoom(_ entry: RecentsStore.Entry) -> Bool {
+        room == entry.room && parsedURL?.absoluteString == entry.serverURL
+    }
+
+    private func recentRoomLabel(_ entry: RecentsStore.Entry) -> String {
+        let host = URL(string: entry.serverURL)?.host ?? entry.serverURL
+        return "\(entry.room) — \(host)"
     }
 
     /// A single baseline-aware row primitive keeps labels and editable values optically level.

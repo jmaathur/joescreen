@@ -22,30 +22,20 @@ struct SessionView: View {
         // This is deliberately the session root: NavigationSplitView owns the leading navigator and
         // supplies the standard macOS sidebar toolbar command/keyboard behavior.
         NavigationSplitView {
-            SessionSidebar()
+            SessionSidebar {
+                isConfirmingLeave = true
+            }
         } detail: {
             SessionDetail()
         }
-        // Attached to the split view (not the detail content) so the toolbar keeps one full-width
-        // trailing section: an inspector inside the detail column re-splits the toolbar during its
-        // slide-in animation, which briefly overflows the trailing items into a ">>" menu.
+        // Keep this at the session root so AppKit owns one coherent inspector transition. A custom
+        // split item appears abruptly, while a detail-scoped inspector can reflow trailing toolbar
+        // items into the overflow menu during its slide-in animation.
         .inspector(isPresented: inspectorPresentation) {
             SessionInspector()
                 .inspectorColumnWidth(min: 220, ideal: model.inspectorWidth, max: 380)
         }
         .toolbar {
-            // Navigation placement follows NavigationSplitView's automatic sidebar item on macOS.
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    isConfirmingLeave = true
-                } label: {
-                    Label("Leave Session", systemImage: "rectangle.portrait.and.arrow.right")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .help("Leave the session")
-            }
-
             ToolbarItemGroup(placement: .principal) {
                 if model.gateMuted {
                     Label("Microphone yielding", systemImage: "person.2.wave.2.fill")
@@ -66,7 +56,7 @@ struct SessionView: View {
 
             // This action follows the selected sidebar destination: screen destinations can be
             // shared, while Meeting Notes exposes the transcription + copy-notes controls.
-            ToolbarItemGroup(placement: .secondaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
                 if model.sidebarSelection == .notes {
                     Button {
                         model.copyMeetingNotesToClipboard()
@@ -115,7 +105,7 @@ struct SessionView: View {
                 }
             }
 
-            ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .principal) {
                 MicrophoneToolbarMenu()
                 CameraToolbarMenu()
                 ClipboardToolbarToggle()
@@ -133,16 +123,14 @@ struct SessionView: View {
                       : "Show active speaker in picture in picture")
             }
 
-            // Break the Liquid Glass capsule: on macOS 26 adjacent same-placement items merge
-            // into one glass group, so a separate ToolbarItem alone leaves the inspector toggle
-            // fused to the feature buttons. The spacer forces the visual split.
+            // Keep the inspector at the far primary-action edge, but outside the contextual action
+            // capsule. On Liquid Glass, a fixed toolbar spacer is required to break adjacent items
+            // with the same placement into distinct visual groups.
             if #available(macOS 26.0, *) {
                 ToolbarSpacer(.fixed, placement: .primaryAction)
             }
 
-            // Its own item (not part of the group above) so the inspector toggle renders as a
-            // separate capsule, visually apart from the in-call feature buttons.
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     // Inspector owns its platform transition.
                     model.toggleInspector()
@@ -201,6 +189,7 @@ private struct SessionDetail: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             RemoteControlBanner()
         }
+        .navigationTitle(model.joinParameters?.room ?? "JoeScreen")
     }
 }
 
@@ -210,20 +199,12 @@ private struct SessionInspector: View {
 
     var body: some View {
         ParticipantFaceColumn(selectedParticipantID: model.selectedParticipantID)
-            .background {
-                GeometryReader { geometry in
-                    Color.clear.preference(key: InspectorWidthPreferenceKey.self, value: geometry.size.width)
-                }
-            }
-            .onPreferenceChange(InspectorWidthPreferenceKey.self) {
-                model.recordInspectorWidth(Double($0))
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { width in
+                model.recordInspectorWidth(Double(width))
             }
     }
-}
-
-private struct InspectorWidthPreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 /// The remote-control status banner (F4): "X is driving" while a peer controls one of your windows,
@@ -251,38 +232,6 @@ struct RemoteControlBanner: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
         .background(tint.opacity(0.12))
-    }
-}
-
-/// The media-plane connection state banner (distinct from the SharePlay/session state).
-struct ConnectionBanner: View {
-    @Environment(AppModel.self) private var model
-
-    private var label: (String, Color) {
-        switch model.mediaState {
-        case .connected:    return ("Connected", .green)
-        case .connecting:   return ("Connecting…", .yellow)
-        case .reconnecting: return ("Reconnecting…", .orange)
-        case .disconnected: return ("Disconnected", .secondary)
-        case .failed(let r): return ("Failed: \(r)", .red)
-        }
-    }
-
-    var body: some View {
-        let (text, color) = label
-        HStack(spacing: 8) {
-            Circle().fill(color).frame(width: 8, height: 8)
-            Text(text).font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            if let p = model.joinParameters {
-                Text("\(p.room)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.bar)
     }
 }
 

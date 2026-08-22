@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import JoeScreenKit
 import JoeScreenLiveKit
@@ -16,17 +17,32 @@ struct MicrophoneToolbarMenu: View {
                     Text("No microphones found")
                 } else {
                     ForEach(model.audioInputs) { device in
-                        Button {
-                            model.selectAudioInput(device.id)
-                        } label: {
-                            if isSelected(device) {
-                                Label(device.name, systemImage: "checkmark")
-                            } else {
-                                Text(device.name)
+                        Toggle(isOn: Binding(
+                            get: { model.selectedAudioInputID == device.id },
+                            set: { isOn in
+                                if isOn { model.selectAudioInput(device.id) }
                             }
+                        )) {
+                            Text(device.name)
                         }
                     }
                 }
+            }
+            Divider()
+            // Apple voice processing: echo cancellation + noise suppression + AGC, default ON.
+            // It is also what makes the system-level Voice Isolation mic mode available.
+            Toggle(isOn: Binding(
+                get: { model.voiceIsolationEnabled },
+                set: { model.setVoiceIsolation(enabled: $0) }
+            )) {
+                Label("Voice Isolation", systemImage: "person.wave.2")
+            }
+            // The system mic-mode picker (Standard / Voice Isolation / Wide Spectrum) — Apple's
+            // ML isolation model lives there and is user-selectable only, never app-forced.
+            Button {
+                AVCaptureDevice.showSystemUserInterface(.microphoneModes)
+            } label: {
+                Label("Microphone Mode…", systemImage: "waveform.badge.mic")
             }
             Divider()
             Button {
@@ -51,10 +67,6 @@ struct MicrophoneToolbarMenu: View {
         }
     }
 
-    private func isSelected(_ device: MediaInputDevice) -> Bool {
-        if let selectedID = model.selectedAudioInputID { return device.id == selectedID }
-        return device.isDefault
-    }
 }
 
 /// Native camera split menu with the same primary-action/dropdown behavior as the microphone.
@@ -68,14 +80,16 @@ struct CameraToolbarMenu: View {
                     Text("No cameras found")
                 } else {
                     ForEach(model.videoInputs) { device in
-                        Button {
-                            model.selectVideoInput(device.id)
-                        } label: {
-                            if isSelected(device) {
-                                Label(device.name, systemImage: "checkmark")
-                            } else {
-                                Text(device.name)
+                        // A native menu toggle renders the selected state as a leading checkmark.
+                        // Treat these toggles as a radio group: turning one on selects it, while an
+                        // attempted off-write for the current camera is ignored.
+                        Toggle(isOn: Binding(
+                            get: { model.selectedVideoInputID == device.id },
+                            set: { isOn in
+                                if isOn { model.selectVideoInput(device.id) }
                             }
+                        )) {
+                            Text(device.name)
                         }
                     }
                 }
@@ -110,10 +124,6 @@ struct CameraToolbarMenu: View {
         }
     }
 
-    private func isSelected(_ device: MediaInputDevice) -> Bool {
-        if let selectedID = model.selectedVideoInputID { return device.id == selectedID }
-        return device.isDefault
-    }
 }
 
 /// Session-scoped clipboard sharing presented as a native stateful toolbar toggle.
