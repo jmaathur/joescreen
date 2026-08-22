@@ -1,41 +1,70 @@
 import SwiftUI
 import JoeScreenKit
 
-/// The participant roster, each entry in its deterministic `ParticipantColor` (spec §3.3). The local
-/// participant is marked "(you)". Membership is driven by the transport/session participant stream.
-struct RosterView: View {
+/// Native session navigator. One tagged selection enum drives the detail area; there are no
+/// per-row selection booleans. The List keeps its system sidebar material and keyboard behavior.
+struct SessionSidebar: View {
     @Environment(AppModel.self) private var model
 
     private var sortedParticipants: [ParticipantID] {
-        model.participants.sorted { $0.uuidString < $1.uuidString }
+        model.participants.sorted {
+            let lhs = model.displayLabel(for: $0).localizedCaseInsensitiveCompare(model.displayLabel(for: $1))
+            return lhs == .orderedSame ? $0.uuidString < $1.uuidString : lhs == .orderedAscending
+        }
+    }
+
+    /// A native single-selection List uses an optional binding. Refuse nil writes so the detail area
+    /// always has exactly one `SidebarSelection` source of truth in AppModel.
+    private var selection: Binding<SidebarSelection?> {
+        Binding(
+            get: { model.sidebarSelection },
+            set: { if let selection = $0 { model.sidebarSelection = selection } })
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Participants")
-                    .font(.headline)
-                Spacer()
-                Text("\(model.participants.count)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            Divider()
-
-            if sortedParticipants.isEmpty {
-                Text("Waiting for participants…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(12)
-            } else {
-                List(sortedParticipants, id: \.self) { id in
-                    RosterRow(id: id, isLocal: id == model.localParticipantID)
+        @Bindable var model = model
+        List(selection: selection) {
+            Section(isExpanded: $model.screenSharesSectionExpanded) {
+                HStack {
+                    Label("All Screens", systemImage: "rectangle.grid.2x2")
+                    Spacer()
+                    Text("\(model.sharedWindowsSorted.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
-                .listStyle(.sidebar)
+                .tag(SidebarSelection.screenShares)
+            } header: {
+                Text("Screen Shares")
             }
-            Spacer()
+
+            Section(isExpanded: $model.notesSectionExpanded) {
+                Label("Meeting Notes", systemImage: "note.text")
+                    .tag(SidebarSelection.notes)
+            } header: {
+                Text("Notes")
+            }
+
+            Section(isExpanded: $model.participantsSectionExpanded) {
+                if sortedParticipants.isEmpty {
+                    Label("Waiting for participants…", systemImage: "person.2")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(sortedParticipants, id: \.self) { id in
+                        RosterRow(id: id, isLocal: id == model.localParticipantID)
+                            .tag(SidebarSelection.participant(id))
+                    }
+                }
+            } header: {
+                Text("Participants")
+            }
+        }
+        .listStyle(.sidebar)
+        .navigationSplitViewColumnWidth(min: 190, ideal: 230, max: 300)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                ConnectionBanner()
+            }
         }
     }
 }

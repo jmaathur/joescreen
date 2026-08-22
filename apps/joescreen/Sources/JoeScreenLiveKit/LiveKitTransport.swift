@@ -580,13 +580,27 @@ public actor LiveKitTransport: MediaTransport {
         switch kind {
         case .videoInput:
             guard let devices = try? await CameraCapturer.captureDevices() else { return [] }
-            // AVFoundation has no "is default camera" concept; leave isDefault false for all.
-            return devices.map { MediaInputDevice(id: $0.uniqueID, name: $0.localizedName, isDefault: false) }
+            // AVFoundation has no per-user "default camera" preference, but `AVCaptureDevice.default`
+            // is the device that gets captured when no explicit choice was made — flag it so the
+            // picker can show a checkmark before the user ever picks.
+            let defaultID = AVCaptureDevice.default(for: .video)?.uniqueID
+            return devices.map {
+                MediaInputDevice(id: $0.uniqueID, name: $0.localizedName, isDefault: $0.uniqueID == defaultID)
+            }
         case .audioInput:
             return AudioManager.shared.inputDevices.map {
                 MediaInputDevice(id: $0.deviceId, name: $0.name, isDefault: $0.isDefault)
             }
         }
+    }
+
+    /// The uniqueID of the camera the live capturer is actually using, or nil while the camera is
+    /// off. Lets the app pin the picker's checkmark to reality after an implicit (default-device)
+    /// enable, where no explicit selection exists yet.
+    public func activeCameraDeviceID() -> String? {
+        guard let track = cameraPublication?.track as? LocalVideoTrack,
+              let capturer = track.capturer as? CameraCapturer else { return nil }
+        return capturer.device?.uniqueID
     }
 
     /// Route mic capture to the input device with `deviceID`. macOS-only (AudioManager input-device

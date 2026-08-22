@@ -7,7 +7,7 @@ struct RootView: View {
 
     var body: some View {
         @Bindable var model = model
-        ZStack {
+        Group {
             switch model.phase {
             case .idle:
                 WelcomeView()
@@ -19,7 +19,9 @@ struct RootView: View {
                 FailureView(message: message)
             }
         }
-        .frame(minWidth: 520, minHeight: 380)
+        // Keep one stable minimum across idle, connecting, and in-call phases. Compact enough to
+        // tuck beside other work: sidebar + a usable center column + the 220pt face inspector.
+        .frame(minWidth: 880, minHeight: 520)
         .sheet(isPresented: $model.showJoinSheet) {
             JoinSheet()
         }

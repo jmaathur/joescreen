@@ -9,6 +9,35 @@ import ScreenCaptureKit
 import AVFoundation
 import LiveKit
 
+/// The single selection domain for the session navigator. A participant selection filters the
+/// center share grid to that owner; the fixed destinations show all shares or the room notes.
+public enum SidebarSelection: Hashable {
+    case screenShares
+    case notes
+    case participant(ParticipantID)
+
+    fileprivate var persistenceKey: String {
+        switch self {
+        case .screenShares: return "screen-shares"
+        case .notes: return "notes"
+        case .participant(let id): return "participant:\(id.uuidString)"
+        }
+    }
+
+    fileprivate init?(persistenceKey: String) {
+        if persistenceKey == "screen-shares" {
+            self = .screenShares
+        } else if persistenceKey == "notes" {
+            self = .notes
+        } else if persistenceKey.hasPrefix("participant:"),
+                  let id = ParticipantID(uuidString: String(persistenceKey.dropFirst("participant:".count))) {
+            self = .participant(id)
+        } else {
+            return nil
+        }
+    }
+}
+
 /// The central @MainActor observable app state and orchestrator for the macOS client.
 ///
 /// It owns the connection lifecycle (Direct Session Mode → LiveKit media plane), the roster, the
@@ -35,8 +64,71 @@ public final class AppModel {
     /// joiner it's the union-merge of every snapshot applied from the `state` channel.
     public private(set) var room = RoomModel()
     public private(set) var participants: Set<ParticipantID> = []
+    /// Stable, collision-free color slots retained for the duration of one call. Departed slots are
+    /// not reused, so a reconnect never changes somebody's established visual identity.
+    @ObservationIgnored private var participantColorSlots: [ParticipantID: Int] = [:]
     public private(set) var mediaState: MediaConnectionState = .disconnected
     public var showJoinSheet: Bool = true
+
+    // MARK: - Session navigation + inspector restoration
+
+    @ObservationIgnored @AppStorage("JoeScreen.session.sidebarSelection")
+    private var persistedSidebarSelection = "screen-shares"
+    @ObservationIgnored @AppStorage("JoeScreen.session.screenSharesExpanded")
+    private var persistedScreenSharesSectionExpanded = true
+    @ObservationIgnored @AppStorage("JoeScreen.session.notesExpanded")
+    private var persistedNotesSectionExpanded = true
+    @ObservationIgnored @AppStorage("JoeScreen.session.participantsExpanded")
+    private var persistedParticipantsSectionExpanded = true
+    @ObservationIgnored @AppStorage("JoeScreen.session.inspectorWidth")
+    private var persistedInspectorWidth = 260.0
+    @ObservationIgnored @AppStorage("JoeScreen.session.inspectorPresented")
+    private var persistedInspectorPresented = true
+
+    /// The only selection state used by the navigator and detail area.
+    public var sidebarSelection: SidebarSelection = .screenShares {
+        didSet {
+            guard sidebarSelection != oldValue else { return }
+            persistedSidebarSelection = sidebarSelection.persistenceKey
+        }
+    }
+    /// Collapsible native List sections, mirrored into observable state and persisted by AppStorage.
+    public var screenSharesSectionExpanded = true {
+        didSet { persistedScreenSharesSectionExpanded = screenSharesSectionExpanded }
+    }
+    public var notesSectionExpanded = true {
+        didSet { persistedNotesSectionExpanded = notesSectionExpanded }
+    }
+    public var participantsSectionExpanded = true {
+        didSet { persistedParticipantsSectionExpanded = participantsSectionExpanded }
+    }
+    /// Actual inspector presentation. Framework-driven changes update this value without changing
+    /// the user's saved preference; only explicit toolbar actions persist visibility.
+    public private(set) var inspectorIsPresented = true
+    public private(set) var inspectorWidth = 260.0
+    @ObservationIgnored private var inspectorWidthPersistenceTask: Task<Void, Never>?
+
+    // MARK: - Active-speaker picture in picture
+
+    /// The loudest participant currently reported as speaking. The audio activity pump updates this
+    /// at 10 Hz; when the room goes quiet the last speaker remains selected until somebody else talks.
+    public private(set) var activeSpeakerParticipantID: ParticipantID?
+    /// Session-scoped presentation state for the floating active-speaker panel.
+    public private(set) var isActiveSpeakerPictureInPicturePresented = false
+
+    /// PiP has a useful initial subject even before LiveKit reports its first speaking transition.
+    public var pictureInPictureParticipantID: ParticipantID? {
+        if let activeSpeakerParticipantID, participants.contains(activeSpeakerParticipantID) {
+            return activeSpeakerParticipantID
+        }
+        if let localParticipantID { return localParticipantID }
+        return participants.sorted { $0.uuidString < $1.uuidString }.first
+    }
+
+    public var selectedParticipantID: ParticipantID? {
+        guard case .participant(let id) = sidebarSelection else { return nil }
+        return id
+    }
 
     /// Remote video tracks we're rendering, keyed by JoeScreen windowID (parsed from the track name).
     /// The RemoteWindowManager opens/closes native NSWindows to match this set.
@@ -74,8 +166,6 @@ public final class AppModel {
     /// partial) plus the recording-note boundary events, all applied idempotently. Pure projection
     /// source for the transcript pane (D19).
     public private(set) var transcript = TranscriptModel()
-    /// Whether the transcript/notes pane is visible in the session view.
-    public var showTranscriptPane: Bool = false
     /// Local mic → shared transcript (Apple Speech on its own audio engine). Observable; the UI
     /// reads `state` for the soft-failure reason.
     public let transcriptionService = TranscriptionService()
@@ -104,6 +194,10 @@ public final class AppModel {
     public var micLive: Bool { micEnabled && !gateMuted }
     /// Whether the local webcam is currently publishing. Drives the camera toggle in the control bar.
     public private(set) var cameraEnabled: Bool = false
+    /// Whether a camera enable/disable/switch is in flight. Opening a capture device, producing the
+    /// first frame, and publishing can take seconds (external cameras especially) — the control bar
+    /// shows a spinner instead of the camera icon while this is true.
+    public private(set) var cameraBusy: Bool = false
     /// The selectable audio-input devices for the mic dropdown (refreshed on join / when opened).
     public private(set) var audioInputs: [MediaInputDevice] = []
     /// The selectable webcam devices for the camera dropdown (refreshed on join / after camera TCC).
@@ -200,6 +294,7 @@ public final class AppModel {
 
     private let transport = LiveKitTransport()
     private let windowManager = RemoteWindowManager()
+    private let pictureInPictureManager = ActiveSpeakerPictureInPictureManager()
     private let borderOverlay = ShareBorderOverlay()
     private var stateChannel: (any WireDataChannel)?
     private var cursorPump: CursorPump?
@@ -215,16 +310,96 @@ public final class AppModel {
 
     public init(launchJoin: DirectJoinParameters? = nil, autoShareWindowID: UInt32? = nil,
                 autoShareDisplayID: CGDirectDisplayID? = nil) {
+        sidebarSelection = SidebarSelection(persistenceKey: persistedSidebarSelection) ?? .screenShares
+        screenSharesSectionExpanded = persistedScreenSharesSectionExpanded
+        notesSectionExpanded = persistedNotesSectionExpanded
+        participantsSectionExpanded = persistedParticipantsSectionExpanded
+        inspectorWidth = min(max(persistedInspectorWidth, 220), 380)
+        inspectorIsPresented = persistedInspectorPresented
         self.launchJoin = launchJoin
         self.autoShareWindowID = autoShareWindowID
         self.autoShareDisplayID = autoShareDisplayID
         if launchJoin != nil { self.showJoinSheet = false }
         windowManager.model = self
+        pictureInPictureManager.model = self
         hoverShare = HoverShareController(model: self)
         installGlobalMicHotkey()
         coLocatedParticipants = Set(
             (UserDefaults.standard.stringArray(forKey: Self.coLocatedDefaultsKey) ?? [])
                 .compactMap(ParticipantID.init(uuidString:)))
+    }
+
+    /// Explicit user action: toggle and persist inspector visibility. One global preference — the
+    /// inspector does not follow the navigator selection.
+    public func toggleInspector() {
+        setInspectorPresented(!inspectorIsPresented, persistPreference: true)
+    }
+
+    /// SwiftUI may temporarily hide the inspector while reconciling columns/window size. Reflect the
+    /// actual presentation without overwriting the user's saved preference.
+    public func handleSystemInspectorPresentationChange(_ isPresented: Bool) {
+        setInspectorPresented(isPresented, persistPreference: false)
+    }
+
+    /// Explicit toolbar action for the session-scoped active-speaker PiP panel.
+    public func setActiveSpeakerPictureInPicturePresented(_ isPresented: Bool) {
+        guard isPresented != isActiveSpeakerPictureInPicturePresented else { return }
+        isActiveSpeakerPictureInPicturePresented = isPresented
+        if isPresented {
+            pictureInPictureManager.show()
+        } else {
+            pictureInPictureManager.close()
+        }
+    }
+
+    /// Called by the panel delegate when the user closes PiP with its native close button.
+    func activeSpeakerPictureInPictureDidClose() {
+        isActiveSpeakerPictureInPicturePresented = false
+    }
+
+    /// Persist a user-resized inspector width after its geometry settles. In particular, never feed
+    /// the inspector's animated intermediate widths straight back into `inspectorColumnWidth`:
+    /// doing so changes the transition's layout target while the native transition is in flight.
+    public func recordInspectorWidth(_ width: Double) {
+        inspectorWidthPersistenceTask?.cancel()
+        inspectorWidthPersistenceTask = nil
+
+        guard inspectorIsPresented, width.isFinite, width >= 200 else { return }
+        let clamped = min(max(width, 220), 380)
+        guard abs(clamped - persistedInspectorWidth) >= 1 else { return }
+
+        inspectorWidthPersistenceTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(350))
+            } catch {
+                return
+            }
+
+            guard let self else { return }
+            defer { self.inspectorWidthPersistenceTask = nil }
+            guard self.inspectorIsPresented else { return }
+            guard abs(clamped - self.persistedInspectorWidth) >= 1 else { return }
+            // Save the settled width without mutating the `ideal` supplied to the inspector that
+            // is currently on screen. The saved value is applied the next time it is presented.
+            self.persistedInspectorWidth = clamped
+        }
+    }
+
+    private func setInspectorPresented(_ isPresented: Bool, persistPreference: Bool) {
+        if !isPresented {
+            inspectorWidthPersistenceTask?.cancel()
+            inspectorWidthPersistenceTask = nil
+        }
+        if persistPreference {
+            persistedInspectorPresented = isPresented
+        }
+        guard inspectorIsPresented != isPresented else { return }
+        if isPresented {
+            // Updating the preferred width while the inspector is hidden cannot interfere with
+            // its transition; SwiftUI may still restore a newer native divider position.
+            inspectorWidth = min(max(persistedInspectorWidth, 220), 380)
+        }
+        inspectorIsPresented = isPresented
     }
 
     /// Install a passive global ⌘⇧M monitor so the mic can be toggled while the app isn't focused.
@@ -474,6 +649,9 @@ public final class AppModel {
         borderOverlay.hide()
         isSharingDisplay = false
         await transport.disconnect()
+        pictureInPictureManager.close()
+        isActiveSpeakerPictureInPicturePresented = false
+        activeSpeakerParticipantID = nil
         windowManager.closeAll()
         remoteWindows.removeAll()
         cameraTracks.removeAll()
@@ -485,6 +663,7 @@ public final class AppModel {
         lifecycles.removeAll()
         micEnabled = false
         cameraEnabled = false
+        cameraBusy = false
         localCameraTrack = nil
         audioGate.release()
         gateAppliedMicMute = false
@@ -493,7 +672,6 @@ public final class AppModel {
         transcript = TranscriptModel()
         transcriptChannel = nil
         lastSelfPublishedSegmentAt = [:]
-        showTranscriptPane = false
         audioInputs = []
         videoInputs = []
         selectedAudioInputID = nil
@@ -503,6 +681,7 @@ public final class AppModel {
         transportParticipants = []
         room = RoomModel()
         localParticipantID = nil
+        participantColorSlots.removeAll()
         mediaState = .disconnected
         stateChannel = nil
         cursorPump = nil
@@ -590,6 +769,11 @@ public final class AppModel {
         var roster = transportParticipants
         roster.formUnion(room.shares.values)
         if let me = localParticipantID { roster.insert(me) }
+        // Assign a deterministic batch order when several peers arrive together, then retain every
+        // assignment for the session so later joins cannot recolor existing people.
+        for id in roster.sorted(by: { $0.uuidString < $1.uuidString }) {
+            _ = participantColorSlot(for: id)
+        }
         participants = roster
     }
 
@@ -695,6 +879,7 @@ public final class AppModel {
         pumps.append(Task { @MainActor [weak self] in
             await pump.runInbound(
                 mutate: { apply in self?.drawState.apply(apply) },
+                onStroke: { op in self?.drawState.scheduleExpiry(for: op) },
                 onChange: { _ in /* DrawState.rev already bumps the Canvas */ })
         })
     }
@@ -714,11 +899,11 @@ public final class AppModel {
     /// the inbound echo is then a same-seq no-op (rejectedStaleSequence), not a duplicate stroke.
     public func sendStroke(windowID: WindowID, points: [NormalizedPoint]) {
         guard let me = localParticipantID, points.count > 1 else { return }
-        let c = ParticipantColor.components(for: me)
-        let color = RGBAColor(r: c.r, g: c.g, b: c.b, a: 1)
+        let color = participantRGBAColor(for: me)
         let op = DrawOp(authorID: me, authorSeq: drawSequencer.advance(), windowID: windowID,
                         points: points, color: color, width: 3)
         drawState.apply { $0.apply(op) }
+        drawState.scheduleExpiry(for: op)
         Task { await drawPump?.send(op) }
     }
 
@@ -757,6 +942,11 @@ public final class AppModel {
             // do it while empty to avoid clobbering live local strokes with a stale snapshot.
             if let ink = snap.draw, !ink.isEmpty, drawState.model.isEmpty {
                 drawState.apply { $0 = ink }
+                // The ephemeral contract holds for seeded ink too: each stroke's 15s lifetime
+                // counts from local receipt, so nothing seeded can outlive the room's ink.
+                for window in ink.windowsWithInk {
+                    for op in ink.strokes(in: window) { drawState.scheduleExpiry(for: op) }
+                }
             }
         case .shareEvent:
             guard let ev = try? WireCodec.unpack(envelope, as: ShareEvent.self) else { return }
@@ -1186,6 +1376,10 @@ public final class AppModel {
     /// only a mute it applied itself.
     private func audioGateTick() async {
         let activity = await transport.audioActivitySnapshot()
+        updateActiveSpeaker(
+            localIsSpeaking: activity.localIsSpeaking,
+            localLevel: activity.localLevel,
+            remotes: activity.remotes)
         let shouldMute = audioGate.evaluate(
             localIsSpeaking: activity.localIsSpeaking,
             localLevel: activity.localLevel,
@@ -1210,6 +1404,28 @@ public final class AppModel {
         gateMuted = gateAppliedMicMute
     }
 
+    /// Pick the loudest participant LiveKit currently considers speech. A small level floor catches
+    /// SDK speaking-flag jitter; retaining the prior value through silence prevents the PiP flashing
+    /// to an empty state between words and sentences.
+    private func updateActiveSpeaker(
+        localIsSpeaking: Bool,
+        localLevel: Float,
+        remotes: [CoLocatedAudioGate.RemoteAudioSample]
+    ) {
+        var candidates: [(id: ParticipantID, level: Float)] = remotes.compactMap { sample in
+            guard sample.isSpeaking || sample.level > 0.01 else { return nil }
+            return (sample.participantID, sample.level)
+        }
+        if let localParticipantID, localIsSpeaking || localLevel > 0.01 {
+            candidates.append((localParticipantID, localLevel))
+        }
+        guard let loudest = candidates.max(by: { lhs, rhs in
+            if lhs.level == rhs.level { return lhs.id.uuidString > rhs.id.uuidString }
+            return lhs.level < rhs.level
+        }) else { return }
+        activeSpeakerParticipantID = loudest.id
+    }
+
     /// Route the mic to a specific input device (nil = keep current). Persists the selection so the
     /// checkmark and future captures follow it.
     public func selectAudioInput(_ deviceID: String) {
@@ -1220,8 +1436,11 @@ public final class AppModel {
     /// Toggle the webcam on/off. Enabling preflights camera TCC (deterministic system prompt) and,
     /// on success, publishes a camera track + exposes the local track for the self-preview tile.
     public func toggleCamera() {
+        guard !cameraBusy else { return } // one in-flight transition at a time
         let target = !cameraEnabled
+        cameraBusy = true
         Task {
+            defer { cameraBusy = false }
             if target {
                 let granted = await Self.ensureCameraAccess()
                 guard granted else {
@@ -1238,6 +1457,11 @@ public final class AppModel {
             }
             cameraEnabled = await transport.isCameraPublished()
             localCameraTrack = cameraEnabled ? await transport.localCameraVideoTrack() : nil
+            // An implicit (default-device) enable never set selectedVideoInputID — read the device
+            // the capturer actually opened so the picker's checkmark reflects reality.
+            if cameraEnabled, selectedVideoInputID == nil {
+                selectedVideoInputID = await transport.activeCameraDeviceID()
+            }
         }
     }
 
@@ -1245,8 +1469,10 @@ public final class AppModel {
     /// otherwise just records the selection for the next enable.
     public func selectVideoInput(_ deviceID: String) {
         selectedVideoInputID = deviceID
-        guard cameraEnabled else { return }
+        guard cameraEnabled, !cameraBusy else { return }
+        cameraBusy = true
         Task {
+            defer { cameraBusy = false }
             do {
                 try await transport.setCamera(enabled: true, deviceID: deviceID)
                 localCameraTrack = await transport.localCameraVideoTrack()
@@ -1671,6 +1897,35 @@ public final class AppModel {
         }
     }
 
+    /// One continuous meeting-notes stream: finalized note segments plus live partials, in spoken
+    /// order. Single source for the transcript pane and the clipboard export.
+    public var meetingNoteSegmentsSorted: [TranscriptSegment] {
+        let finalized = transcript.notes.flatMap(\.segments)
+        return (finalized + transcript.liveSegments).sorted {
+            if $0.startTime == $1.startTime {
+                return $0.segmentID.uuidString < $1.segmentID.uuidString
+            }
+            return $0.startTime < $1.startTime
+        }
+    }
+
+    /// Whether there is at least one finalized segment worth exporting (partials are excluded).
+    public var hasMeetingNotesToCopy: Bool {
+        meetingNoteSegmentsSorted.contains(where: \.isFinal)
+    }
+
+    /// Copy the meeting notes to the system pasteboard as plain text, one "Name: words" line per
+    /// finalized segment. In-flight partials are skipped — they may still be rewritten.
+    public func copyMeetingNotesToClipboard() {
+        let lines = meetingNoteSegmentsSorted
+            .filter(\.isFinal)
+            .map { "\(displayLabel(for: $0.speakerID)): \($0.text)" }
+        guard !lines.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(lines.joined(separator: "\n"), forType: .string)
+    }
+
     /// Publish a transcript-channel payload (segments and note events share one send path).
     private func broadcastTranscript<M: WireMessage>(_ payload: M) {
         guard let me = localParticipantID, let channel = transcriptChannel else { return }
@@ -1788,8 +2043,54 @@ public final class AppModel {
     }
 
     public func color(for id: ParticipantID) -> Color {
-        let c = ParticipantColor.components(for: id)
-        return Color(red: c.r, green: c.g, blue: c.b)
+        Color(nsColor: participantSystemColor(for: id))
+    }
+
+    /// Apple's semantic system colors adapt to appearance and accessibility settings. The first 12
+    /// participants each receive a distinct base color; larger sessions get distinct light/dark
+    /// variants derived from the same system palette.
+    private static let participantSystemColorPalette: [NSColor] = [
+        .systemBlue, .systemOrange, .systemGreen, .systemPink,
+        .systemPurple, .systemTeal, .systemRed, .systemCyan,
+        .systemYellow, .systemMint, .systemIndigo, .systemBrown,
+    ]
+
+    private func participantColorSlot(for id: ParticipantID) -> Int {
+        if let slot = participantColorSlots[id] { return slot }
+        let count = Self.participantSystemColorPalette.count
+        let preferred = ParticipantColor.hueIndex(for: id) % count
+        let used = Set(participantColorSlots.values)
+        var probe = 0
+        var candidate = preferred
+        while used.contains(candidate) {
+            probe += 1
+            let paletteIndex = (preferred + probe) % count
+            let variant = probe / count
+            candidate = variant * count + paletteIndex
+        }
+        participantColorSlots[id] = candidate
+        return candidate
+    }
+
+    private func participantSystemColor(for id: ParticipantID) -> NSColor {
+        let slot = participantColorSlot(for: id)
+        let palette = Self.participantSystemColorPalette
+        let base = palette[slot % palette.count]
+        let variant = slot / palette.count
+        guard variant > 0 else { return base }
+        let fraction = min(CGFloat(variant) * 0.12, 0.48)
+        let target = variant.isMultiple(of: 2) ? NSColor.black : NSColor.white
+        return base.blended(withFraction: fraction, of: target) ?? base
+    }
+
+    private func participantRGBAColor(for id: ParticipantID) -> RGBAColor {
+        let color = participantSystemColor(for: id).usingColorSpace(.deviceRGB)
+            ?? participantSystemColor(for: id)
+        return RGBAColor(
+            r: Double(color.redComponent),
+            g: Double(color.greenComponent),
+            b: Double(color.blueComponent),
+            a: Double(color.alphaComponent))
     }
 
     public func shortLabel(for id: ParticipantID) -> String {

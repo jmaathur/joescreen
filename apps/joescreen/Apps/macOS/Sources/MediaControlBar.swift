@@ -3,151 +3,22 @@ import JoeScreenKit
 import JoeScreenLiveKit
 import LiveKit
 
-/// The bottom control bar of the in-call view (CoScreen-style): mic + camera split-buttons on the
-/// left, a Leave button on the right. Each split-button is a primary toggle (click the icon to
-/// mute/unmute or turn the camera on/off) plus a `⌄` menu to pick the input device — matching the
-/// reference UI. Mic/camera state and device lists live on `AppModel`; this view is purely a
-/// projection of that state.
-struct MediaControlBar: View {
+/// Native macOS split menu: the main face toggles the microphone and the chevron opens input
+/// selection. Keeping this as a Menu lets the window toolbar supply its standard appearance,
+/// keyboard behavior, hover treatment, and menu affordance.
+struct MicrophoneToolbarMenu: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        HStack(spacing: 10) {
-            // Microphone split-button: mic.fill when live, mic.slash.fill (red) when muted.
-            MediaSplitButton(
-                isOn: model.micLive,
-                onSymbol: "mic.fill",
-                offSymbol: "mic.slash.fill",
-                onHelp: "Mute microphone",
-                offHelp: "Turn on microphone",
-                menuTitle: "Select your microphone",
-                devices: model.audioInputs,
-                selectedID: model.selectedAudioInputID,
-                onToggle: { model.toggleMic() },
-                onSelect: { model.selectAudioInput($0) },
-                onMenuOpen: { Task { await model.refreshAudioInputs() } })
-
-            // Subtle gate indicator: the co-located-speaker gate is holding the mic muted.
-            if model.gateMuted {
-                Label("Yielding", systemImage: "person.2.wave.2.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .help("Mic auto-muted: a co-located participant is speaking")
-            }
-
-            // Camera split-button: video.fill when live, video.slash.fill (red) when off.
-            MediaSplitButton(
-                isOn: model.cameraEnabled,
-                onSymbol: "video.fill",
-                offSymbol: "video.slash.fill",
-                onHelp: "Turn off camera",
-                offHelp: "Turn on camera",
-                menuTitle: "Select your camera",
-                devices: model.videoInputs,
-                selectedID: model.selectedVideoInputID,
-                onToggle: { model.toggleCamera() },
-                onSelect: { model.selectVideoInput($0) },
-                onMenuOpen: { Task { await model.refreshVideoInputs() } })
-
-            // Clipboard sync toggle (F6): session-scoped, default OFF. On → the clipboard is shared.
-            Button {
-                model.setClipboardSyncEnabled(!model.clipboardSyncEnabled)
-            } label: {
-                Image(systemName: model.clipboardSyncEnabled ? "doc.on.clipboard.fill" : "doc.on.clipboard")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(model.clipboardSyncEnabled ? Color.accentColor : Color.secondary)
-                    .frame(width: 34, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(model.clipboardSyncEnabled ? "Clipboard sharing ON (this session) — click to stop" : "Share clipboard with the room (this session only)")
-
-            // "Sharing Display" chip with a stop button (M11), shown only while sharing a screen.
-            if model.isSharingDisplay {
-                HStack(spacing: 6) {
-                    Image(systemName: "rectangle.on.rectangle.angled")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.red)
-                    Text("Sharing Display").font(.caption.weight(.medium))
-                    Button {
-                        model.stopDisplayShare()
-                    } label: {
-                        Image(systemName: "stop.circle.fill").foregroundStyle(.red)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Stop sharing your screen")
-                }
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(Color.red.opacity(0.12), in: Capsule())
-            }
-
-            Spacer()
-
-            // Notes toggle: shows/hides the shared transcript + recording-notes pane.
-            Button {
-                model.showTranscriptPane.toggle()
-            } label: {
-                Label("Notes", systemImage: "list.bullet.rectangle")
-            }
-            .help("Show the shared transcript and recording notes")
-
-            Button(role: .destructive) {
-                model.leave()
-            } label: {
-                Label("Leave", systemImage: "rectangle.portrait.and.arrow.right")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .help("Leave the session")
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.bar)
-    }
-}
-
-/// A two-part control: a toggle button (icon reflects on/off; red tint when off) fused with a `⌄`
-/// menu that lists the selectable input devices. Generic over mic vs camera via its parameters.
-private struct MediaSplitButton: View {
-    let isOn: Bool
-    let onSymbol: String
-    let offSymbol: String
-    let onHelp: String
-    let offHelp: String
-    let menuTitle: String
-    let devices: [MediaInputDevice]
-    let selectedID: String?
-    let onToggle: () -> Void
-    let onSelect: (String) -> Void
-    let onMenuOpen: () -> Void
-
-    var body: some View {
-        HStack(spacing: 0) {
-            // Primary toggle: click the icon to turn the device on/off.
-            Button(action: onToggle) {
-                Image(systemName: isOn ? onSymbol : offSymbol)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(isOn ? Color.primary : Color.red)
-                    .frame(width: 34, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(isOn ? onHelp : offHelp)
-
-            Divider().frame(height: 18)
-
-            // Device-selection dropdown.
-            Menu {
-                Section(menuTitle) {
-                    if devices.isEmpty {
-                        Text("No devices found").foregroundStyle(.secondary)
-                    }
-                    ForEach(devices) { device in
+        Menu {
+            Section("Microphone") {
+                if model.audioInputs.isEmpty {
+                    Text("No microphones found")
+                } else {
+                    ForEach(model.audioInputs) { device in
                         Button {
-                            onSelect(device.id)
+                            model.selectAudioInput(device.id)
                         } label: {
-                            // A checkmark marks the active device; a device is "active" if it's the
-                            // explicit selection, or (when nothing is chosen yet) the system default.
                             if isSelected(device) {
                                 Label(device.name, systemImage: "checkmark")
                             } else {
@@ -156,29 +27,116 @@ private struct MediaSplitButton: View {
                         }
                     }
                 }
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 24, height: 28)
-            .onTapGesture { onMenuOpen() } // refresh the list right before it renders
+            Divider()
+            Button {
+                Task { await model.refreshAudioInputs() }
+            } label: {
+                Label("Refresh Microphones", systemImage: "arrow.clockwise")
+            }
+        } label: {
+            Label(
+                model.micLive ? "Mute Microphone" : "Turn On Microphone",
+                systemImage: model.micLive ? "mic.fill" : "mic.slash.fill")
+                .labelStyle(.iconOnly)
+                .foregroundStyle(model.micLive ? Color.primary : Color.red)
+        } primaryAction: {
+            model.toggleMic()
         }
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(Color(nsColor: .controlBackgroundColor)))
-        .overlay(
-            RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
+        .help(model.micLive ? "Mute microphone" : "Turn on microphone")
+        .task {
+            if model.audioInputs.isEmpty {
+                await model.refreshAudioInputs()
+            }
+        }
     }
 
-    /// Whether `device` is the one currently in use: the explicit selection, or the system default
-    /// when the user hasn't picked one yet.
     private func isSelected(_ device: MediaInputDevice) -> Bool {
-        if let selectedID { return device.id == selectedID }
+        if let selectedID = model.selectedAudioInputID { return device.id == selectedID }
         return device.isDefault
+    }
+}
+
+/// Native camera split menu with the same primary-action/dropdown behavior as the microphone.
+struct CameraToolbarMenu: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Menu {
+            Section("Camera") {
+                if model.videoInputs.isEmpty {
+                    Text("No cameras found")
+                } else {
+                    ForEach(model.videoInputs) { device in
+                        Button {
+                            model.selectVideoInput(device.id)
+                        } label: {
+                            if isSelected(device) {
+                                Label(device.name, systemImage: "checkmark")
+                            } else {
+                                Text(device.name)
+                            }
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button {
+                Task { await model.refreshVideoInputs() }
+            } label: {
+                Label("Refresh Cameras", systemImage: "arrow.clockwise")
+            }
+        } label: {
+            if model.cameraBusy {
+                ProgressView()
+                    .controlSize(.small)
+                    .help("Starting camera…")
+            } else {
+                Label(
+                    model.cameraEnabled ? "Turn Off Camera" : "Turn On Camera",
+                    systemImage: model.cameraEnabled ? "video.fill" : "video.slash.fill")
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(model.cameraEnabled ? Color.primary : Color.red)
+            }
+        } primaryAction: {
+            guard !model.cameraBusy else { return }
+            model.toggleCamera()
+        }
+        .help(model.cameraBusy ? "Starting camera…" : (model.cameraEnabled ? "Turn off camera" : "Turn on camera"))
+        .task {
+            if model.videoInputs.isEmpty {
+                await model.refreshVideoInputs()
+            }
+        }
+    }
+
+    private func isSelected(_ device: MediaInputDevice) -> Bool {
+        if let selectedID = model.selectedVideoInputID { return device.id == selectedID }
+        return device.isDefault
+    }
+}
+
+/// Session-scoped clipboard sharing presented as a native stateful toolbar toggle.
+struct ClipboardToolbarToggle: View {
+    @Environment(AppModel.self) private var model
+
+    private var isOn: Binding<Bool> {
+        Binding(
+            get: { model.clipboardSyncEnabled },
+            set: { model.setClipboardSyncEnabled($0) })
+    }
+
+    var body: some View {
+        Toggle(isOn: isOn) {
+            Label(
+                model.clipboardSyncEnabled ? "Stop Clipboard Sharing" : "Share Clipboard",
+                systemImage: model.clipboardSyncEnabled ? "doc.on.clipboard.fill" : "doc.on.clipboard")
+                .labelStyle(.iconOnly)
+        }
+        .toggleStyle(.button)
+        .help(model.clipboardSyncEnabled
+              ? "Clipboard sharing is on — click to stop"
+              : "Share clipboard with the room for this session")
     }
 }
 

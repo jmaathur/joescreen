@@ -56,6 +56,7 @@ struct JoeScreenApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
+                .environment(model.drawState)
                 .onOpenURL { url in
                     if let params = DirectJoinParameters.fromURL(url) {
                         model.requestJoin(params)
@@ -67,7 +68,8 @@ struct JoeScreenApp: App {
                 }
         }
         // A single main window; remote shared windows are separate NSWindows (M4).
-        .windowResizability(.contentSize)
+        .defaultSize(width: 1100, height: 720)
+        .windowResizability(.contentMinSize)
         .commands {
             SharedWindowsCommands(model: model)
             CommandMenu("Call") {

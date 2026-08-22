@@ -19,7 +19,66 @@ final class DrawState {
         rev &+= 1
     }
 
-    func reset() { model = DrawModel(); rev &+= 1; drawModeEnabled = false }
+    func reset() {
+        model = DrawModel()
+        rev &+= 1
+        drawModeEnabled = false
+        pendingExpiries.removeAll()
+        expiryTask?.cancel()
+        expiryTask = nil
+    }
+
+    // MARK: - Ephemeral ink
+
+    /// Every stroke evaporates this long after it lands (annotation is transient by design —
+    /// "look here", not a persistent whiteboard).
+    static let strokeLifetime: TimeInterval = 15
+
+    private struct PendingExpiry {
+        let window: WindowID
+        let author: ParticipantID
+        let seq: UInt64
+        let deadline: Date
+    }
+
+    @ObservationIgnored private var pendingExpiries: [PendingExpiry] = []
+    @ObservationIgnored private var expiryTask: Task<Void, Never>?
+
+    /// Start a stroke's 15s countdown. Called for locally sent, inbound, and snapshot-seeded ops;
+    /// the lifetime counts from LOCAL receipt (≈ stroke end for live ink). Double-scheduling the
+    /// same stroke (e.g. the echo of our own op) is harmless: the second removal is a no-op.
+    func scheduleExpiry(for op: DrawOp) {
+        pendingExpiries.append(PendingExpiry(
+            window: op.windowID, author: op.authorID, seq: op.authorSeq,
+            deadline: Date().addingTimeInterval(Self.strokeLifetime)))
+        armExpiryTimer()
+    }
+
+    /// One timer for the EARLIEST deadline only — re-armed after each prune, cancelled on reset.
+    private func armExpiryTimer() {
+        guard expiryTask == nil, let next = pendingExpiries.map(\.deadline).min() else { return }
+        let delay = max(next.timeIntervalSinceNow, 0)
+        expiryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.expiryTask = nil
+            self?.pruneExpired()
+        }
+    }
+
+    private func pruneExpired() {
+        let now = Date()
+        let due = pendingExpiries.filter { $0.deadline <= now }
+        pendingExpiries.removeAll { $0.deadline <= now }
+        if !due.isEmpty {
+            apply { model in
+                for expiry in due {
+                    model.removeStroke(by: expiry.author, in: expiry.window, authorSeq: expiry.seq)
+                }
+            }
+        }
+        armExpiryTimer()
+    }
 }
 
 /// A SwiftUI `Canvas` ink overlay drawn over a remote window's video (F9). Renders every

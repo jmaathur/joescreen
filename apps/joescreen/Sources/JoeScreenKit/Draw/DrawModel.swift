@@ -73,6 +73,19 @@ public struct DrawModel: Codable, Sendable, Equatable {
         }
     }
 
+    /// Remove ONE stroke by its (author, authorSeq) identity — the ephemeral-ink expiry path
+    /// (every stroke evaporates a fixed interval after it ends). The author's sequence watermark
+    /// is intentionally untouched, so a replayed copy of an expired op is still rejected, never
+    /// resurrected. Removing an already-gone stroke (undone/cleared first) is a no-op.
+    public mutating func removeStroke(by author: ParticipantID, in window: WindowID, authorSeq: UInt64) {
+        guard var authorStrokes = strokesByWindow[window]?[author] else { return }
+        authorStrokes.removeAll { $0.authorSeq == authorSeq }
+        strokesByWindow[window]?[author] = authorStrokes.isEmpty ? nil : authorStrokes
+        if strokesByWindow[window]?.isEmpty == true {
+            strokesByWindow[window] = nil
+        }
+    }
+
     // MARK: - Housekeeping
 
     /// Drop everything for a window (its share ended). Also forgets sequence watermarks — window
@@ -118,4 +131,7 @@ public struct DrawModel: Codable, Sendable, Equatable {
 
     /// Whether there is no ink anywhere (for the late-joiner seed guard).
     public var isEmpty: Bool { strokesByWindow.isEmpty }
+
+    /// Every window currently holding ink (so a seeded snapshot can schedule expiry per stroke).
+    public var windowsWithInk: [WindowID] { Array(strokesByWindow.keys) }
 }
