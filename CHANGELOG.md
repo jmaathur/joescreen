@@ -7,6 +7,32 @@ The user-facing highlights from each version are also shown in the "What's new" 
 [joescreen.cheffing.dev](https://joescreen.cheffing.dev) — keep that section (in
 `apps/joescreen-download/src/changelog.ts`) in sync with the entries here when you cut a release.
 
+## [0.4.0] — 2026-08-21 · early beta
+
+### New
+- **Ephemeral screen annotations** — the pencil in the All Screens toolbar arms draw mode; strokes
+  drawn over any other participant's share tile broadcast to the whole room and evaporate 15
+  seconds after each stroke ends. Expiry is scheduled on every ingest path (your own strokes,
+  inbound strokes, and the snapshot a late joiner receives), and it preserves the per-author
+  sequence watermark so replayed expired strokes stay rejected.
+- **Copy Notes** — a transcript toolbar action that exports the finalized meeting notes as plain
+  text.
+
+### Changed
+- **Native toolbar rework** — mic, camera, and clipboard controls moved out of the bottom media bar
+  into native toolbar split menus. The inspector toggle now sits in its own Liquid Glass capsule on
+  macOS 26 (gated; the deployment floor stays macOS 14).
+- **Inspector** — visibility is a single global preference instead of being remembered per sidebar
+  selection, and it attaches to the split view, so opening it no longer flashes the `>>` toolbar
+  overflow chevron.
+- **Transcript** — meeting notes read top-down and auto-follow new lines as they arrive.
+- **Join sheet** — the form hugs its content, rows are uniform height, and the valid-URL check icon
+  is gone.
+- Empty share and note lists use native `ContentUnavailableView`s, the window minimum is a more
+  compact 880×520, and participant tiles and the roster got display-name polish.
+
+[0.4.0]: https://joescreen.cheffing.dev
+
 ## [0.3.2] — 2026-08-13 · early beta
 
 ### Changed

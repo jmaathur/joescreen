@@ -14,6 +14,17 @@ export interface Release {
 // Newest first.
 export const RELEASES: Release[] = [
 	{
+		version: "0.4.0",
+		date: "2026-08-21",
+		tag: "early beta",
+		highlights: [
+			"Ephemeral screen annotations: arm the pencil and draw on anyone's shared screen — ink shows for the whole room and fades 15 seconds after each stroke",
+			"Native toolbar rework: mic, camera, and clipboard moved into toolbar menus; the inspector toggle gets its own capsule",
+			"Meeting notes now read top-down and auto-follow new lines, with a new Copy Notes action",
+			"Polished join sheet, native empty states for shares and notes, and a more compact minimum window size",
+		],
+	},
+	{
 		version: "0.3.2",
 		date: "2026-08-13",
 		tag: "early beta",
